@@ -40,12 +40,16 @@ different places and can fail independently.
 ## Build order (do not skip ahead)
 
 1. Get both subdomains resolving with a placeholder response, end to end.
-2. Build the intake state machine against **chat** (send/receive chat messages
-   through the bot). This must fully work before touching voice.
-3. Swap the input/output leg from chat to real-time transcript + OpenAI TTS output
-   audio. Keep chat mode working as a fallback, not a discard.
-4. Deploy both sides for real.
-5. Write the summary generation step.
+2. Build the state machine, conversation log, and intake/summary engine behind a
+   mode-neutral interface (`handle_incoming_turn` / `send_outgoing_turn` — see
+   `docs/IMPLEMENTATION.md`). Nothing above this interface should know about chat
+   or voice specifically.
+3. Implement that interface for **chat** (send/receive chat messages through the
+   bot). This must fully work before touching voice.
+4. Add a second implementation of the interface for voice (real-time transcript +
+   OpenAI TTS output audio). This is an addition, not a rewrite of step 3 — chat
+   mode keeps working unchanged.
+5. Deploy both sides for real.
 6. Docs and README pass.
 
 ## Conventions

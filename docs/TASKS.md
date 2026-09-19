@@ -28,34 +28,48 @@ works end to end.
 - [ ] Summary prompt written: structured fields listed in SPEC.md.
 - [ ] Engine tested standalone (no Recall involved yet) with a scripted conversation.
 
-## 4. Chat mode (must work)
+## 4. Mode boundary (build before chat mode)
 
-- [ ] Backend receives chat messages from the bot via Recall.
-- [ ] Backend sends the engine's next question back as a chat message.
+- [ ] `handle_incoming_turn` / `send_outgoing_turn` defined as the interface
+      between the state machine and the meeting platform. See
+      `IMPLEMENTATION.md`.
+- [ ] State machine, conversation log, `engine/intake.py`, `engine/summary.py`
+      written only in terms of this interface, no chat-specific code above it.
+
+## 5. Chat mode (must work)
+
+- [ ] `handle_incoming_turn` implemented for chat: parses an incoming chat
+      message event into patient text.
+- [ ] `send_outgoing_turn` implemented for chat: posts the engine's next
+      question as a chat message.
 - [ ] Full loop tested against a real Google Meet call, start to summary.
 
-## 5. Voice mode (stretch)
+## 6. Voice mode (stretch, added alongside chat mode, not a rewrite of it)
 
 - [ ] OpenAI TTS wired up on the backend.
-- [ ] Backend sends bot's question as audio through Recall's output-audio path.
+- [ ] `send_outgoing_turn` implemented for voice: calls TTS, sends output audio
+      through Recall.
 - [ ] Backend subscribes to real-time transcript.
 - [ ] Silence-gap turn-taking logic implemented.
+- [ ] `handle_incoming_turn` implemented for voice: turns a transcript-gap
+      signal into patient text.
 - [ ] Full loop tested against a real Google Meet call, start to summary.
-- [ ] Chat mode still works after this (did not get broken or removed).
+- [ ] Chat mode still works unchanged (it should not need to be touched to add
+      this).
 
-## 6. Frontend
+## 7. Frontend
 
 - [ ] Meeting URL input, submits to backend.
 - [ ] Status display, polls backend.
 - [ ] Summary display once complete.
 
-## 7. Deploy for real
+## 8. Deploy for real
 
 - [ ] Backend deployed on the homelab server, tunnel live.
 - [ ] Frontend deployed to Workers.
 - [ ] Full flow tested against the live URLs, not localhost.
 
-## 8. Docs pass
+## 9. Docs pass
 
 - [ ] README finished: links at top, narrative, setup instructions, limitations.
 - [ ] ARCHITECTURE.md finished.
