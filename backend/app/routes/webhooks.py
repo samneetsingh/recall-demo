@@ -12,7 +12,10 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from app.db import session_store
-from app.db.models import Status
+from app.db.models import Session, Status
+from app.engine import loop
+from app.modes.base import CLOSING_MESSAGE, ModeError, TurnMode, get_mode
+from app.modes.chat import CHAT_EVENT
 from app.recall import events as recall_events
 from app.recall.events import PayloadError, RecallEvent, SignatureError
 
@@ -39,8 +42,8 @@ BOT_EVENT_STATUS: dict[str, Status] = {
 # The events that carry a reason for the `error_reason` column.
 ERROR_EVENTS = {"bot.fatal", "bot.recording_permission_denied"}
 
-# The real-time events. A later task gives each one its logic.
-REALTIME_EVENTS = {"participant_events.chat_message", "transcript.data"}
+# The real-time events. `transcript.data` gets its logic in section 6.
+REALTIME_EVENTS = {CHAT_EVENT, "transcript.data"}
 
 
 @router.post("/recall")
@@ -71,8 +74,12 @@ def handle_event(event: RecallEvent) -> None:
     This runs after the response. A failure here is invisible to Recall, so it
     must be in the log.
     """
+    if event.name == CHAT_EVENT:
+        _run_chat_turn(event)
+        return
+
     if event.name in REALTIME_EVENTS:
-        # The chat loop and the voice loop are later tasks.
+        # The voice loop is section 6 of docs/TASKS.md.
         logger.info("real-time event %s for bot %s", event.name, event.bot_id)
         return
 
@@ -80,13 +87,8 @@ def handle_event(event: RecallEvent) -> None:
         logger.info("no rule for event %s, no change", event.name)
         return
 
-    if event.bot_id is None:
-        logger.warning("event %s has no bot id, no change", event.name)
-        return
-
-    session = session_store.get_session_by_bot_id(event.bot_id)
+    session = _session_of(event)
     if session is None:
-        logger.warning("no session has bot id %s, no change", event.bot_id)
         return
 
     if event.name == "bot.call_ended":
@@ -98,7 +100,7 @@ def handle_event(event: RecallEvent) -> None:
     else:
         status = BOT_EVENT_STATUS[event.name]
         reason = event.sub_code if event.name in ERROR_EVENTS else None
-        
+
     if not session_store.apply_bot_event(session.id, status, reason, event.event_at):
         logger.info(
             "session %s did not take event %s of %s, no change",
@@ -109,3 +111,63 @@ def handle_event(event: RecallEvent) -> None:
         return
 
     logger.info("session %s is now %s, event %s", session.id, status, event.name)
+
+    if status == "in_progress":
+        # The bot is in the call, so the assistant asks its first question.
+        # `apply_bot_event` gave True, so a repeated event does not arrive here.
+        loop.start_intake(session.id)
+
+
+def _session_of(event: RecallEvent) -> Session | None:
+    """Give the session of the bot of an event, or None."""
+    if event.bot_id is None:
+        logger.warning("event %s has no bot id, no change", event.name)
+        return None
+
+    session = session_store.get_session_by_bot_id(event.bot_id)
+    if session is None:
+        logger.warning("no session has bot id %s, no change", event.bot_id)
+        return None
+
+    return session
+
+
+def _run_chat_turn(event: RecallEvent) -> None:
+    """Take one chat message into the intake loop."""
+    session = _session_of(event)
+    if session is None:
+        return
+
+    try:
+        mode = get_mode(session.mode)
+    except ModeError as error:
+        logger.warning("session %s has no mode: %s", session.id, error)
+        session_store.set_status(session.id, "error", str(error))
+        return
+
+    text = mode.handle_incoming_turn(session.id, event)
+    if text is None:
+        return
+
+    # The Svix message id is the same for each retry of one message, so the
+    # turns table refuses a repeated delivery by itself.
+    loop.run_turn(session.id, text, event.message_id)
+
+    if session.status != "complete":
+        # `session` is the status before this turn. A message that arrives
+        # after the intake ended must not send the closing line again.
+        _send_closing_message(session.id, mode)
+
+
+def _send_closing_message(session_id: str, mode: TurnMode) -> None:
+    """Say one last line if the intake became complete on this turn."""
+    session = session_store.get_session(session_id)
+    if session is None or session.status != "complete":
+        return
+
+    try:
+        mode.send_outgoing_turn(session_id, CLOSING_MESSAGE)
+    except ModeError as error:
+        # The intake is complete and the summary is written. A closing line
+        # that did not go out must not take that away.
+        logger.warning("session %s sent no closing message: %s", session_id, error)

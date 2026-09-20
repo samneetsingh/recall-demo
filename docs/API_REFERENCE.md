@@ -94,6 +94,15 @@ every request.
 A verified request gives HTTP 200 and `{"ok": true}` immediately. The work runs after
 the response, because Recall sends the events in sequence and has a 15 second timeout.
 
+**What the events do.** `bot.in_call_recording` starts the intake, so the assistant asks
+its first question. A `participant_events.chat_message` is one patient turn: the backend
+reads the text, runs the engine, and sends the next question into the meeting chat. When
+the engine ends the intake, the backend writes the summary and then sends one closing
+message. `transcript.data` gets a log line only until section 6 of `TASKS.md`.
+
+**The bot does not answer itself.** The bot receives its own chat messages back. A
+message whose sender name is the bot name is not a turn.
+
 The map from a bot event to `status`:
 
 | Event | `status` | `error_reason` |
@@ -129,6 +138,8 @@ event with no time is applied, because a true event must not be lost.
 
 ## Extending this
 
-To add a new interaction mode, add a value to `mode`, implement the matching input/
-output handling in `backend/engine/`, and keep the session status machine the same —
-the frontend only depends on `status` and `summary`, not on how a mode is implemented.
+To add a new interaction mode, add a value to `mode`, write a class with
+`handle_incoming_turn` and `send_outgoing_turn` in `backend/app/modes/`, put it in the
+`MODES` registry of `app/modes/base.py`, and keep the session status machine the same.
+`app/modes/chat.py` is the example. The frontend only depends on `status` and `summary`,
+not on how a mode is implemented.

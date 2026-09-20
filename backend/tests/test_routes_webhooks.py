@@ -1,4 +1,4 @@
-"""The tests of POST /webhooks/recall and the map from an event to a status."""
+"""The tests of POST /webhooks/recall: the status map, and the chat wire."""
 
 import itertools
 import json
@@ -6,11 +6,18 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import settings
 from app.db import session_store
-from tests.conftest import signed_headers
+from app.engine import intake, prompts, summary as summary_engine
+from app.modes.base import CLOSING_MESSAGE
+from app.recall import client as recall_client
+from app.recall.client import RecallError
+from tests.conftest import chat_payload, signed_headers
 
 BOT_ID = "bot-abc"
 MEETING_URL = "https://meet.google.com/abc-defg-hij"
+
+SUMMARY_ANSWER = {field: f"the {field}" for field in prompts.SUMMARY_FIELDS}
 
 
 @pytest.fixture
@@ -22,9 +29,60 @@ def session_id() -> str:
     return session.id
 
 
-def _post(client: TestClient, payload: dict):
+@pytest.fixture
+def sent() -> list[str]:
+    """The messages that went to the meeting chat."""
+    return []
+
+
+@pytest.fixture(autouse=True)
+def offline(monkeypatch: pytest.MonkeyPatch, sent: list[str]) -> None:
+    """No test in this file calls OpenAI or Recall.
+
+    The route starts the intake now, so a test that makes a session
+    `in_progress` reaches the model and the chat send. Both are fakes here.
+    """
+    asked = {"count": 0}
+
+    def fake_intake(system, messages, schema, schema_name):
+        asked["count"] += 1
+        return {
+            "action": "ask",
+            "turn": asked["count"],
+            "question": f"question {asked['count']}",
+            "notes": "",
+        }
+
+    def fake_summary(system, messages, schema, schema_name):
+        return SUMMARY_ANSWER
+
+    monkeypatch.setattr(intake, "ask_model", fake_intake)
+    monkeypatch.setattr(summary_engine, "ask_model", fake_summary)
+    monkeypatch.setattr(
+        recall_client,
+        "send_chat_message",
+        lambda bot_id, text: sent.append(text),
+    )
+
+
+def _post(client: TestClient, payload: dict, message_id: str = "msg_test_00000001"):
     body = json.dumps(payload).encode()
-    return client.post("/webhooks/recall", content=body, headers=signed_headers(body))
+    return client.post(
+        "/webhooks/recall",
+        content=body,
+        headers=signed_headers(body, message_id=message_id),
+    )
+
+
+def _chat(
+    client: TestClient,
+    text: str = "I get bad headaches",
+    sender: str = "Samneet Singh",
+    bot_id: str = BOT_ID,
+    message_id: str = "msg_test_00000001",
+):
+    """Send one signed chat message, in the true shape of the Recall event."""
+    return _post(client, chat_payload(text, sender, bot_id), message_id=message_id)
 
 
 def _bot_event(name: str, sub_code: str | None = None, bot_id: str = BOT_ID) -> dict:
@@ -340,3 +398,207 @@ def test_the_event_time_is_stored_in_one_format(
     session = session_store.get_session(session_id)
     assert session is not None
     assert session.last_event_at == "2026-09-20T05:47:04.556000+00:00"
+
+
+# --- The chat wire: section 5 -------------------------------------------
+
+
+def test_the_bot_in_the_call_asks_the_first_question(
+    client: TestClient, session_id: str, sent: list[str]
+) -> None:
+    """`bot.in_call_recording` starts the intake. Nothing did this before."""
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    assert sent == ["question 1"]
+    log = session_store.get_turns(session_id)
+    assert log == [{"role": "bot", "text": "question 1"}]
+
+
+def test_a_chat_message_gives_one_turn_and_one_question(
+    client: TestClient, session_id: str, sent: list[str]
+) -> None:
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    result = _chat(client, "I get bad headaches", message_id="msg_02")
+
+    assert result.status_code == 200
+    log = session_store.get_turns(session_id)
+    assert log == [
+        {"role": "bot", "text": "question 1"},
+        {"role": "patient", "text": "I get bad headaches"},
+        {"role": "bot", "text": "question 2"},
+    ]
+    assert sent == ["question 1", "question 2"]
+
+
+def test_the_same_chat_message_two_times_gives_one_turn(
+    client: TestClient, session_id: str, sent: list[str]
+) -> None:
+    """Recall delivers at least one time. The `webhook-id` is the `event_id`."""
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    _chat(client, "I get bad headaches", message_id="msg_02")
+    _chat(client, "I get bad headaches", message_id="msg_02")
+
+    assert len(session_store.get_turns(session_id)) == 3
+    assert sent == ["question 1", "question 2"]
+
+
+def test_the_bot_does_not_answer_itself(
+    client: TestClient, session_id: str, sent: list[str]
+) -> None:
+    """The bot receives its own messages back. It must not interview itself."""
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    _chat(client, "question 1", sender=settings.RECALL_BOT_NAME, message_id="msg_02")
+
+    assert session_store.get_turns(session_id) == [
+        {"role": "bot", "text": "question 1"}
+    ]
+    assert sent == ["question 1"]
+
+
+def test_a_chat_message_for_an_unknown_bot_gives_200(
+    client: TestClient, session_id: str, sent: list[str]
+) -> None:
+    result = _chat(client, bot_id="bot-other", message_id="msg_02")
+
+    assert result.status_code == 200
+    assert session_store.get_turns(session_id) == []
+    assert sent == []
+
+
+def test_a_chat_message_before_the_bot_is_in_the_call_changes_nothing(
+    client: TestClient, session_id: str, sent: list[str]
+) -> None:
+    result = _chat(client, "hello?", message_id="msg_02")
+
+    assert result.status_code == 200
+    assert session_store.get_turns(session_id) == []
+    assert sent == []
+
+
+def test_an_empty_chat_message_changes_nothing(
+    client: TestClient, session_id: str, sent: list[str]
+) -> None:
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    _chat(client, "   ", message_id="msg_02")
+
+    assert len(session_store.get_turns(session_id)) == 1
+
+
+def test_the_last_answer_gives_the_summary_and_the_closing_line(
+    client: TestClient, session_id: str, sent: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _post(client, _bot_event("bot.in_call_recording"))
+    # The model ends the intake on the next call.
+    monkeypatch.setattr(
+        intake,
+        "ask_model",
+        lambda system, messages, schema, name: {
+            "action": "complete",
+            "turn": 2,
+            "question": "",
+            "notes": "",
+        },
+    )
+
+    _chat(client, "two weeks", message_id="msg_02")
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "complete"
+    assert session.summary == SUMMARY_ANSWER
+    assert sent == ["question 1", CLOSING_MESSAGE]
+
+
+def test_a_failed_send_puts_the_session_in_error(
+    client: TestClient, session_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A send that failed must not be silent: the frontend reads the reason."""
+
+    def refuse(bot_id: str, text: str) -> None:
+        raise RecallError("recall http 400: the bot is not in a call")
+
+    monkeypatch.setattr(recall_client, "send_chat_message", refuse)
+
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "error"
+    assert "recall http 400" in (session.error_reason or "")
+    # A question that the patient never got is not in the log.
+    assert session_store.get_turns(session_id) == []
+
+
+def test_a_failed_closing_line_keeps_the_session_complete(
+    client: TestClient, session_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The summary is written. A closing line that failed must not take it away."""
+    _post(client, _bot_event("bot.in_call_recording"))
+    monkeypatch.setattr(
+        intake,
+        "ask_model",
+        lambda system, messages, schema, name: {
+            "action": "complete",
+            "turn": 2,
+            "question": "",
+            "notes": "",
+        },
+    )
+
+    def refuse(bot_id: str, text: str) -> None:
+        raise RecallError("recall http 400: the call ended")
+
+    monkeypatch.setattr(recall_client, "send_chat_message", refuse)
+
+    _chat(client, "two weeks", message_id="msg_02")
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "complete"
+    assert session.summary == SUMMARY_ANSWER
+
+
+def test_a_session_in_voice_mode_gives_an_error_and_no_turn(
+    client: TestClient, sent: list[str]
+) -> None:
+    """Voice mode has no implementation until section 6."""
+    session = session_store.create_session(MEETING_URL, "voice")
+    session_store.set_bot_id(session.id, "bot-voice")
+    session_store.set_status(session.id, "in_progress")
+
+    _chat(client, "I get bad headaches", bot_id="bot-voice", message_id="msg_02")
+
+    after = session_store.get_session(session.id)
+    assert after is not None
+    assert after.status == "error"
+    assert "no implementation" in (after.error_reason or "")
+    assert sent == []
+
+
+def test_a_message_after_the_intake_sends_no_second_closing_line(
+    client: TestClient, session_id: str, sent: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _post(client, _bot_event("bot.in_call_recording"))
+    monkeypatch.setattr(
+        intake,
+        "ask_model",
+        lambda system, messages, schema, name: {
+            "action": "complete",
+            "turn": 2,
+            "question": "",
+            "notes": "",
+        },
+    )
+    _chat(client, "two weeks", message_id="msg_02")
+    assert sent == ["question 1", CLOSING_MESSAGE]
+
+    _chat(client, "thank you", message_id="msg_03")
+
+    assert sent == ["question 1", CLOSING_MESSAGE]
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "complete"

@@ -73,8 +73,8 @@ def main() -> int:
         print("no OPENAI_API_KEY. Put one in backend/.env")
         return 1
 
-    # Chat mode does not exist until section 5 of docs/TASKS.md. The registry
-    # is how a mode arrives, so the driver uses the same door.
+    # Chat mode is in the registry since section 5. The driver takes its place,
+    # because it uses the terminal and not Recall. Same door, same protocol.
     MODES["chat"] = ConsoleMode()
 
     session_store.init_db()

@@ -1,6 +1,6 @@
-"""The Recall.ai create-bot call.
+"""The Recall.ai calls: make a bot, and send a chat message.
 
-This module holds the create-bot call only. Bot schema v1.11.
+Bot schema v1.11.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class RecallError(Exception):
-    """A create-bot call failed. The message goes in the `error_reason` column."""
+    """A call to Recall failed. The message goes in the `error_reason` column."""
 
 
 def _redact(text: str) -> str:
@@ -28,6 +28,42 @@ def _redact(text: str) -> str:
     """
     key = settings.RECALL_API_KEY
     return text.replace(key, "***") if key else text
+
+
+# The `chat.on_bot_join` hook sends this when the bot joins. It is the one
+# disclaimer that is permitted and it must stay below 500 characters.
+CONSENT_NOTICE = (
+    "Hello. I am an AI intake assistant, not a physician. "
+    "I ask a few questions about your headaches before your visit, and your "
+    "answers go into a summary for your clinician. Please answer in the chat."
+)
+
+
+def _post(path: str, body: dict[str, Any]) -> httpx.Response:
+    """Send one POST to Recall. Raise `RecallError` for each failure."""
+    if not settings.RECALL_API_KEY:
+        raise RecallError("no Recall API key")
+
+    url = f"{settings.RECALL_API_BASE.rstrip('/')}{path}"
+
+    try:
+        with httpx.Client(timeout=settings.RECALL_TIMEOUT_SECONDS) as client:
+            response = client.post(
+                url,
+                json=body,
+                headers={
+                    "Authorization": f"Token {settings.RECALL_API_KEY}",
+                    "Accept": "application/json",
+                },
+            )
+    except httpx.HTTPError as error:
+        raise RecallError(f"recall request failed: {type(error).__name__}") from error
+
+    if response.status_code >= 400:
+        detail = _redact(response.text)[:200]
+        raise RecallError(f"recall http {response.status_code}: {detail}")
+
+    return response
 
 
 def _recording_config() -> dict[str, Any]:
@@ -63,6 +99,15 @@ def build_request_body(meeting_url: str, session_id: str) -> dict[str, Any]:
         "bot_name": settings.RECALL_BOT_NAME,
         # Recall shows the metadata in the dashboard and in the bot logs, which makes a failed bot easy to find.
         "metadata": {"session_id": session_id},
+        # Google Meet keeps a pinned message visible for a participant who
+        # joins later. The pin needs continuous chat off in the call.
+        "chat": {
+            "on_bot_join": {
+                "send_to": "everyone",
+                "message": CONSENT_NOTICE,
+                "pin": True,
+            }
+        },
         "recording_config": _recording_config(),
     }
 
@@ -72,28 +117,7 @@ def create_bot(meeting_url: str, session_id: str, mode: Mode = "chat") -> str:
 
     Raise `RecallError` with a short reason for each failure.
     """
-    if not settings.RECALL_API_KEY:
-        raise RecallError("no Recall API key")
-
-    url = f"{settings.RECALL_API_BASE.rstrip('/')}/api/v1/bot/"
-    body = build_request_body(meeting_url, session_id)
-
-    try:
-        with httpx.Client(timeout=settings.RECALL_TIMEOUT_SECONDS) as client:
-            response = client.post(
-                url,
-                json=body,
-                headers={
-                    "Authorization": f"Token {settings.RECALL_API_KEY}",
-                    "Accept": "application/json",
-                },
-            )
-    except httpx.HTTPError as error:
-        raise RecallError(f"recall request failed: {type(error).__name__}") from error
-
-    if response.status_code >= 400:
-        detail = _redact(response.text)[:200]
-        raise RecallError(f"recall http {response.status_code}: {detail}")
+    response = _post("/api/v1/bot/", build_request_body(meeting_url, session_id))
 
     try:
         bot_id = response.json()["id"]
@@ -102,3 +126,14 @@ def create_bot(meeting_url: str, session_id: str, mode: Mode = "chat") -> str:
 
     logger.info("made recall bot %s for session %s, mode %s", bot_id, session_id, mode)
     return str(bot_id)
+
+
+def send_chat_message(bot_id: str, text: str) -> None:
+    """Send one chat message into the meeting of a bot.
+
+    Google Meet takes the recipient `everyone` only, so it is not a parameter.
+    It also refuses a message of more than 500 characters; `app/modes/chat.py`
+    applies that limit before it calls this function.
+    """
+    _post(f"/api/v1/bot/{bot_id}/send_chat_message/", {"to": "everyone", "message": text})
+    logger.info("sent %s characters to the chat of bot %s", len(text), bot_id)

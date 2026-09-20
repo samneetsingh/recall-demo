@@ -41,3 +41,25 @@ of it that never calls a model proves nothing.
 **How to apply:** The tests stay free of the network. The live check is a script in the
 scratchpad that a person runs and reads. Put what it showed in the session log, because
 the next session cannot see the output.
+
+## A test that was offline can go online when you wire a route
+
+**Date:** 2026-09-20. **Session:** 09.
+
+**What happened:** The webhook route got the call to the intake loop. The tests of that
+route were written when the route only wrote a log line, so they had no fake model and
+no fake Recall. The first run after the wire sent a real request to `api.openai.com`.
+The tests still "passed" the earlier sessions, so nothing said that the rule was broken.
+
+**The rule:** After you connect a route to a service, run the full suite with each
+socket refused. A test file that was offline because its route did nothing is not
+offline after the route does something.
+
+**Why:** The no-network rule is a property of the whole suite, not of one test file. A
+route is where the rule breaks, because a route gains callers and the tests of it do
+not change at the same time.
+
+**How to apply:** A pytest plugin that makes `socket.socket.connect`,
+`socket.socket.connect_ex` and `socket.create_connection` raise is 10 lines. Keep it in
+the scratchpad and run `poetry run pytest -p block_network` after each change to a
+route. Put the result in the session log.

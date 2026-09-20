@@ -155,16 +155,17 @@ def test_a_model_failure_puts_the_session_in_error(
 def test_a_mode_with_no_implementation_puts_the_session_in_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The registry is empty until section 5 puts chat in it.
+    # Section 5 put chat in the registry. Voice is not in it until section 6.
     _script(monkeypatch)
-    session_id = _new_session()
+    session = session_store.create_session(MEETING_URL, "voice")
+    session_store.set_status(session.id, "in_progress")
 
-    loop.start_intake(session_id)
+    loop.start_intake(session.id)
 
-    session = session_store.get_session(session_id)
-    assert session is not None
-    assert session.status == "error"
-    assert "no implementation" in (session.error_reason or "")
+    after = session_store.get_session(session.id)
+    assert after is not None
+    assert after.status == "error"
+    assert "no implementation" in (after.error_reason or "")
 
 
 def test_a_question_that_was_not_sent_is_not_in_the_log(

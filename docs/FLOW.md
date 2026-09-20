@@ -8,11 +8,14 @@ this file for the path of one request.
 
 ## Read this first
 
-Sections 1 to 4 of [`TASKS.md`](TASKS.md) are complete. Section 5 is not.
+Sections 1 to 5 of [`TASKS.md`](TASKS.md) are complete, with one item open: the live
+Google Meet call of section 5.
 
-**The engine is complete, it is tested, and no production code calls it.** The wire from
-the webhook to the engine is section 5. Flow C below shows where the wire is absent. A
-real Google Meet call today thus gives a bot that joins and then says nothing.
+**The webhook drives the engine now.** Section 5 made `modes/chat.py`, put it in the
+`MODES` registry, and added the two calls that were absent: `loop.start_intake` when the
+bot starts to record, and `loop.run_turn` for each chat message. A real Google Meet call
+thus gives a bot that joins, sends a pinned notice, asks its questions in the chat, and
+writes the summary at the end.
 
 **To drive a full intake now, with no Recall:**
 
@@ -20,10 +23,10 @@ real Google Meet call today thus gives a bot that joins and then says nothing.
 cd backend && poetry run python scripts/intake_console.py
 ```
 
-It puts a terminal mode in the same registry that chat mode will use, and it runs the
-real state machine, the real database and the real model. You are the patient. It does
-not test the Recall wiring, which is the part that section 5 adds. The `Dockerfile`
-copies `app` only, so the script is not in the image.
+It puts a terminal mode in the same registry that chat mode uses, and it runs the real
+state machine, the real database and the real model. You are the patient. It does not
+test the Recall wiring. The `Dockerfile` copies `app` only, so the script is not in the
+image.
 
 ## 1. The parts
 
@@ -165,32 +168,34 @@ sequenceDiagram
         W->>DB: get_session_by_bot_id(bot_id)
         W->>DB: apply_bot_event(id, status, reason, event_at)
         Note over DB: One UPDATE. It applies the event only if<br/>event_at > last_event_at and status is not complete.
+        opt the UPDATE changed the row and the new status is in_progress
+            W->>W: loop.start_intake(session_id) — flow C
+        end
     end
 ```
+
+`apply_bot_event` gives False for an event that is not newer, so a repeated
+`bot.in_call_recording` does not start the intake two times.
 
 The order of arrival does not decide. The time in the event decides. See
 [`session-logs/06-event-ordering.md`](session-logs/06-event-ordering.md).
 
-## 6. Flow C — one intake turn. The engine operates. **Nothing calls it**
+## 6. Flow C — one intake turn. This operates
 
 ```mermaid
 sequenceDiagram
     participant R as Recall.ai
     participant W as routes/webhooks.py
-    participant MO as modes/base.py
+    participant MO as modes/chat.py
     participant L as engine/loop.py
     participant I as engine/intake.py
     participant DB as SQLite
     participant O as OpenAI
 
     R->>W: participant_events.chat_message
-    W--xL: NOT BUILT. Section 5.<br/>Today the handler writes a log line and returns.
-
-    rect rgb(240, 240, 240)
-    Note over MO,O: Everything below is built and tested.<br/>tests/test_engine_loop.py is the only caller.
-    W->>MO: handle_incoming_turn(session_id, raw_event) → patient text
-    Note over MO: NOT BUILT for chat. MODES is empty.
-    MO->>L: run_turn(session_id, text)
+    W->>MO: handle_incoming_turn(session_id, event) → patient text
+    Note over MO: It gives None for the bot's own message,<br/>for an empty text and for another shape.<br/>The route then stops.
+    W->>L: run_turn(session_id, text, event.message_id)
     L->>DB: get_session() — refuse if status is not in_progress
     L->>DB: append_turn(patient, text, event_id)
     Note over DB: One INSERT. It refuses a repeated event_id<br/>and a role that does not alternate.<br/>Either gives None, and the loop stops.
@@ -205,8 +210,8 @@ sequenceDiagram
     end
     alt a question
         L->>MO: send_outgoing_turn(session_id, question)
-        Note over MO: NOT BUILT for chat.<br/>get_mode() raises ModeError today.
-        MO->>R: post a chat message
+        MO->>R: POST /api/v1/bot/{id}/send_chat_message/
+        Note over MO: One message for each 500 characters.<br/>A RecallError becomes a ModeError, and<br/>loop.py puts the session in error.
         L->>DB: append_turn(bot, question)
         Note over L: Send first, then log. A question that<br/>the patient never got is not in the log.
     else complete
@@ -215,11 +220,17 @@ sequenceDiagram
         L->>DB: set_summary(), then set_status(complete)
         Note over L: The summary is written first. The frontend<br/>reads the status and then asks for the summary.
     end
-    end
+    W->>MO: send_outgoing_turn(CLOSING_MESSAGE) if the status is now complete
+    Note over W: The closing line is not a turn, so it is<br/>not in the log. loop.py does not send it.
 ```
 
-**The two gaps in this flow are the whole of section 5:** the call from the webhook
-handler into `loop.run_turn`, and one entry in the `MODES` registry.
+**The first question.** `bot.in_call_recording` calls `loop.start_intake`, which is the
+same path with no patient turn at the start of it. Before that, the create-bot hook
+`chat.on_bot_join` sends the pinned consent notice: Recall sends it, not this backend.
+
+**Three messages of the bot are not turns:** the pinned notice, the closing line, and a
+question that went out in two parts counts one time. The log holds what the engine said,
+one row for each question.
 
 ## 7. The status machine
 
@@ -250,10 +261,12 @@ Two routes and nothing else. The frontend never learns the mode.
 
 ## 9. What is not built, and what is weak
 
-**Not built. This is section 5 and it is planned.**
+**Not built. This is section 6 and it is planned.**
 
-- The call from `routes/webhooks.py` into `loop.run_turn` and `loop.start_intake`.
-- `modes/chat.py`, and its one entry in `MODES`.
+- Voice mode: `tts/openai_tts.py`, the transcript parser, and the silence-gap timer.
+  `transcript.data` arrives at the webhook route and gets a log line only.
+- `MODES` has `chat` and not `voice`. A session with the mode `voice` goes to `error`
+  with the reason `the mode voice has no implementation`.
 
 **Repaired by task 4. Kept here so the reason is not lost.**
 
@@ -266,6 +279,11 @@ Two routes and nothing else. The frontend never learns the mode.
    a role that does not alternate, so a second patient message cannot go in before the
    assistant has answered the first. One message in, one question out.
 
+**Repaired by task 5.**
+
+4. ~~The wire from `routes/webhooks.py` to `loop.run_turn` and `loop.start_intake`.~~
+5. ~~`modes/chat.py`, and its one entry in `MODES`.~~
+
 **Weak. These are faults, not plans.**
 
 1. **A refused patient message is lost.** The half-duplex rule refuses it and the text
@@ -277,5 +295,13 @@ Two routes and nothing else. The frontend never learns the mode.
    last turn has the role `patient` and it is old — and no code reads it.
 3. **A patient who stops answering keeps the session in `in_progress` forever.** Only
    `bot.call_ended` ends it.
+4. **The echo filter is the bot name.** A message whose sender name is
+   `RECALL_BOT_NAME` is not a patient turn. The payload has no "this is the bot" field,
+   so a patient who uses the same name in the call is not heard. The name is also
+   `null` for some platforms, and a `null` name counts as a patient.
+5. **A real-time retry is not proved to keep its `webhook-id`.** The repeat protection
+   of a chat turn is that header. Svix keeps the id for a dashboard event, and Recall
+   retries a real-time message with its own policy: 60 attempts, one each second. If the
+   id changes, a retry makes a second turn.
 
-All three are next steps for the README, not faults of the store.
+All five are next steps for the README, not faults of the store.

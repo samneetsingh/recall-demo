@@ -41,8 +41,11 @@ class RecallEvent:
     payload: dict[str, Any]
 
 
-def _dig(payload: Mapping[str, Any], *keys: str) -> Any:
-    """Read a nested key. Give None if a level is absent or is not a mapping."""
+def dig(payload: Mapping[str, Any], *keys: str) -> Any:
+    """Read a nested key. Give None if a level is absent or is not a mapping.
+
+    `app/modes/chat.py` reads the chat payload with it.
+    """
     value: Any = payload
     for key in keys:
         if not isinstance(value, Mapping):
@@ -95,14 +98,14 @@ def verify_and_parse(raw_body: bytes, headers: Mapping[str, str]) -> RecallEvent
     if not isinstance(name, str) or not name:
         raise PayloadError("the body has no event name")
 
-    bot_id = _dig(payload, "data", "bot", "id")
-    sub_code = _dig(payload, "data", "data", "sub_code")
+    bot_id = dig(payload, "data", "bot", "id")
+    sub_code = dig(payload, "data", "data", "sub_code")
 
     return RecallEvent(
         name=name,
         bot_id=str(bot_id) if bot_id else None,
         sub_code=str(sub_code) if sub_code else None,
-        event_at=_event_time(_dig(payload, "data", "data", "updated_at")),
+        event_at=_event_time(dig(payload, "data", "data", "updated_at")),
         message_id=headers.get("webhook-id"),
         payload=payload,
     )

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from app.db.models import Mode
+from app.modes.chat import ChatMode
 
 
 class ModeError(Exception):
@@ -29,8 +30,16 @@ class TurnMode(Protocol):
         """Send one assistant turn into the meeting."""
 
 
-# Section 5 of docs/TASKS.md puts `chat` here. Section 6 puts `voice` here.
-MODES: dict[Mode, TurnMode] = {}
+# The last message of the intake. It is mode-neutral: voice mode says the same
+# words through TTS. It is not a turn, so it is not in the conversation log.
+CLOSING_MESSAGE = (
+    "Thank you. The intake is complete, and your summary is on the page now. "
+    "A clinician reads it before your visit."
+)
+
+# Section 6 of docs/TASKS.md puts `voice` here. `ChatMode` holds no state, so
+# one instance for the process is correct: the state is in the database.
+MODES: dict[Mode, TurnMode] = {"chat": ChatMode()}
 
 
 def get_mode(mode: Mode) -> TurnMode:

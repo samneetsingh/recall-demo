@@ -47,8 +47,8 @@ works end to end.
 
 - [x] `handle_incoming_turn` / `send_outgoing_turn` defined as the interface
       between the state machine and the meeting platform. See
-      `IMPLEMENTATION.md`. The protocol is `app/modes/base.py`, and the registry
-      is empty until section 5.
+      `IMPLEMENTATION.md`. The protocol is `app/modes/base.py`. Section 5 put
+      `chat` in the registry, and section 6 puts `voice` next to it.
 - [x] State machine, conversation log, `engine/intake.py`, `engine/summary.py`
       written only in terms of this interface, no chat-specific code above it.
       A test reads the engine modules and refuses the words chat and voice.
@@ -69,10 +69,27 @@ works end to end.
 
 ## 5. Chat mode (must work)
 
-- [ ] `handle_incoming_turn` implemented for chat: parses an incoming chat
-      message event into patient text.
-- [ ] `send_outgoing_turn` implemented for chat: posts the engine's next
-      question as a chat message.
+- [x] `handle_incoming_turn` implemented for chat: parses an incoming
+      `participant_events.chat_message` event into patient text. It gives
+      `None` for the bot's own message, which the bot receives back, for an
+      empty text, and for a payload shape that it does not know. See
+      `task-05-chat-mode/todo.md`.
+- [x] `send_outgoing_turn` implemented for chat: posts the engine's next
+      question with `POST /api/v1/bot/{id}/send_chat_message/`. A question of
+      more than 500 characters goes out in two messages, because Google Meet
+      refuses a longer one. A `RecallError` becomes a `ModeError`, so a send
+      that failed puts the session in `error` and is not silent.
+- [x] The wire: `routes/webhooks.py` calls `loop.start_intake` when the bot
+      starts to record, and `loop.run_turn` for each chat message, with the
+      Svix message id as the `event_id`.
+- [x] The greeting: the create-bot hook `chat.on_bot_join` sends the consent
+      notice of `SPEC.md` and pins it. Google Meet keeps a pinned message
+      visible for a participant who joins later. **The pin needs continuous
+      chat off in the call.**
+- [x] The closing line: the bot says that the intake is complete when the
+      summary is written. It is not a turn, so it is not in the log.
+- [x] `engine/intake.py`, `summary.py`, `prompts.py` and `loop.py` did not
+      change. `git diff` on `app/engine/` gives no line.
 - [ ] Full loop tested against a real Google Meet call, start to summary.
 
 ## 6. Voice mode (stretch, added alongside chat mode, not a rewrite of it)
@@ -118,7 +135,8 @@ one file.
       three. Each change to rule 5 needs both a patient with a red flag and a patient
       with none.
 - [ ] A question must be 500 characters or less. Google Meet refuses a longer chat
-      message. Nothing applies this limit today.
+      message. Section 5 cuts a long question into two messages, which operates but
+      reads badly. Make the prompt give a question that fits in one message.
 - [ ] Try a larger model against the same patients, and compare. `OPENAI_MODEL` is a
       setting, so this needs no code change.
 - [ ] Tune `INTAKE_MAX_TURNS`. It is 6 for a short demonstration.

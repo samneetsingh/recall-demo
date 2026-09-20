@@ -28,10 +28,53 @@ it against the session in SQLite.
 
 ## Chat messages (Mode 1)
 
-- Send: see "Sending Chat Messages" in the docs. Backend posts the bot's next question
-  as a chat message in the meeting.
-- Receive: see "Receiving Chat Messages." Comes through as a webhook or real-time
-  event. Backend reads the patient's reply from here.
+**Send.** `POST /api/v1/bot/{id}/send_chat_message/` with the body
+`{"to": "everyone", "message": "..."}`. Google Meet takes the recipient `everyone`
+only, and it refuses a message of more than 500 characters. `app/modes/chat.py` cuts a
+longer message into parts.
+
+**Send when the bot joins.** The create-bot body takes a `chat` object with the hooks
+`on_bot_join` and `on_participant_join`. This build uses the first one for the consent
+notice:
+
+```json
+"chat": { "on_bot_join": { "send_to": "everyone", "message": "...", "pin": true } }
+```
+
+`pin` is supported on Google Meet, and the pinned message stays visible for a
+participant who joins later. **The pin needs continuous chat disabled in the call.** If
+it is on, the message goes out and the pin does not.
+
+**Receive.** The real-time endpoint of the create-bot request, with the event
+`participant_events.chat_message`. The true shape, from the document
+`real-time-event-payloads`:
+
+```json
+{
+  "event": "participant_events.chat_message",
+  "data": {
+    "data": {
+      "participant": { "id": 100, "name": "Samneet Singh", "is_host": true,
+                       "platform": "desktop", "extra_data": {}, "email": null },
+      "timestamp": { "absolute": "2026-09-20T05:48:18.360372Z", "relative": 76.8 },
+      "data": { "text": "I get bad headaches", "to": "everyone" }
+    },
+    "realtime_endpoint": { "id": "...", "metadata": {} },
+    "participant_events": { "id": "...", "metadata": {} },
+    "recording": { "id": "...", "metadata": {} },
+    "bot": { "id": "...", "metadata": {} }
+  }
+}
+```
+
+The text is at `data.data.data.text` and the sender is at
+`data.data.participant.name`. **The payload has no field that says "the bot sent this".**
+The bot receives its own messages back, so the backend compares the sender name with
+`RECALL_BOT_NAME`.
+
+**A real-time event is not a dashboard event.** It goes directly to the URL of the
+create-bot request, it is not in the Webhooks console, and Recall retries it up to 60
+times, one each second. The signature is the same workspace secret.
 
 ## Real-time transcript (Mode 2)
 
