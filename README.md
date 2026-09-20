@@ -9,18 +9,12 @@ questionnaire. At the end it writes a structured clinical summary.
 
 ## Why this demo
 
-I am the founding engineer at FIRY AI, a clinical AI platform for headache and
-neurological care. I build conversational intake and triage systems as my day job. This
-demo reuses that shape of problem, structured and adaptive patient interviews, on top of
-Recall's API. The intake logic here is a prompted general-purpose LLM, not FIRY's real
-clinical engine.
+I am the founding engineer at FIRY AI, a clinical AI platform for headache and neurological care. I build conversational intake and triage systems as my day job. This demo reuses that shape of problem, structured and adaptive patient interviews, on top of Recall's API. The intake logic here is a prompted general-purpose LLM, not FIRY's real clinical engine.
 
 The use case fits two scenarios:
 
-- A patient gives intake details before a scheduled visit, so the visit starts with the
-  context already collected.
-- A standalone triage flow, to route or prioritize care before a clinician sees the
-  patient.
+- A patient gives intake details before a scheduled visit, so the visit starts with the context already collected.
+- A standalone triage flow, to route or prioritize care before a clinician sees the patient.
 
 ## How it works
 
