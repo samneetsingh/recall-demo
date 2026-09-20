@@ -155,6 +155,40 @@ again.
   `backend/.env` gives HTTP 200: `bot.in_call_recording` makes the status
   `in_progress`, and `bot.fatal` makes the status `error` with the `error_reason`
   `meeting_link_invalid`. The secret was not written to a terminal at any time.
+- **The deployed backend on the homelab accepts a webhook that Recall signed.** Sam
+  deployed at the end of this session. Method: `recall-ai` MCP,
+  `send_test_webhook_endpoint` for the endpoint `ep_3JZumFBubz7xBTnyeUonK4U1MfH` with
+  the event `bot.done`, message `msg_3JZykC3VSu08pFCG5KUPpJ0kBxP`. The container log on
+  the server gives `POST /webhooks/recall HTTP/1.1" 200 OK` and
+  `no rule for event bot.done, no change`. This proves the full path: Recall, Cloudflare,
+  the tunnel, nginx, FastAPI and the signature check with the workspace secret.
+- **A request signed with the workspace secret is accepted over the live URL.** Method:
+  a `curl` command to `https://recall-api.ss-ubuntu-01.net/webhooks/recall` with a
+  signature made from the secret in `backend/.env`. The result is HTTP 200 and
+  `{"ok":true}`. An unsigned request to the same URL gives HTTP 401 and
+  `{"detail":"bad signature"}`.
+- **A real Google Meet call proved the full connection.** Method: `POST /sessions` on
+  the live URL with the meeting `https://meet.google.com/sfm-eepj-mjg`. The result is
+  HTTP 201 and `waiting_for_bot`. Sam admitted the bot. The session then went to
+  `in_progress`, and at the end of the call to `error` with the `error_reason`
+  `call_ended:timeout_exceeded_everyone_left`. The bot id is
+  `92627318-0bee-4ddc-89e7-8cf484724b18`, and its `metadata` holds the session id.
+- **Each bot status webhook was delivered and accepted.** Method: `recall-ai` MCP,
+  `list_webhook_deliveries` for the bot. The events `bot.joining_call`,
+  `bot.in_waiting_room`, `bot.in_call_not_recording` and `bot.in_call_recording` each
+  give `delivery_status: success`, `response_status_code: 200` and the body
+  `{"ok":true}`. The times are 132 ms to 153 ms.
+- **The real-time endpoint delivers the chat messages.** Method: a chat message in the
+  meeting. The container log on the server gives
+  `real-time event participant_events.chat_message for bot 92627318-...`. This path is
+  the `realtime_endpoints` object of the create-bot request, not the dashboard endpoint.
+- **Recall delivers the bot status events out of order.** Method: the `attempted_at`
+  times from `list_webhook_deliveries`. The four events were made in 48 ms. Recall
+  attempted `bot.in_waiting_room` at `.556` and `bot.joining_call` at `.612`, which is
+  the opposite of the order the events were made in. The handler is last-write-wins, so
+  an event that arrives late can put an old status on the session. This run was correct
+  because the two first events map to the same status and `bot.in_call_recording` came
+  last. See the open items.
 - **The old test secret is refused by the container.** Method: a payload signed with
   `whsec_MfKQ9r8...`, the fake secret of `tests/conftest.py`, gives HTTP 401. This
   proves that the container uses the real secret and not a default. A changed signature
@@ -197,20 +231,21 @@ again.
 - [ ] A test session row is in the live database, with the bot id `bot-live-001` and
       the status `error`. It comes from the proof of the real secret. It is demo data
       and it does no harm. `session_store` has no delete helper.
-- [ ] `backend/.env` on the homelab server, and a new deploy. Owner: Sam. **This is now
-      the only blocker for a live bot.** The homelab runs the task 1 image.
-      `POST https://recall-api.ss-ubuntu-01.net/webhooks/recall` gives HTTP 404 with the
-      body `{"detail":"Not Found"}`, which is the FastAPI shape. The tunnel, nginx and
-      the path thus operate, and only the code is old. `GET /health` gives HTTP 200. The
-      server also needs `RECALL_WEBHOOK_SECRET` in its `.env`, or the new route gives
-      HTTP 401 and Svix retries for 24 hours.
-- [ ] A live test with a real Google Meet call. Owner: the session that does section 5.
-      It needs the two items above.
+- [x] `backend/.env` on the homelab server, and a new deploy. Owner: Sam. **Done at the
+      end of this session.** The stack is at `~/docker/recall-demo/backend` on
+      `ss-ubuntu-01`. `GET /health` gives HTTP 200, an unsigned POST to
+      `/webhooks/recall` gives HTTP 401, and a signed POST gives HTTP 200. The server
+      has its own empty `recall-api_db-data` volume.
+- [x] A live test with a real Google Meet call. **Done at the end of this session.**
+      The bot joined, the status went to `in_progress`, a chat message arrived, and the
+      end of the call gave `error` with `call_ended:timeout_exceeded_everyone_left`. The
+      bot said nothing, because the intake engine of section 3 does not exist.
+- [x] **The webhook handler is last-write-wins, and Recall delivers out of order.**
+      Session 06 fixed this. See `../task-02-event-ordering/todo.md`.
 - [ ] Starlette says that `httpx` with `TestClient` is deprecated, and it tells you to
       install `httpx2`. The 66 tests pass with a warning only. `httpx` is a main
       dependency now, because `client.py` uses it. Owner: the next session that touches
       the tests.
-- [ ] The two `overseerr` files in `~/docker/nginx-proxy/conf.d.disabled/`. Owner: Sam.
 
 ## Next session starts here
 

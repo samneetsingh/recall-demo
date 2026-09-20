@@ -195,9 +195,8 @@ network. The session did not change `frontend/`.
 - **The server has Docker Compose v2.39.4.** Method: `docker compose version`. This
   version accepts the long `env_file` syntax, which needs 2.24 or more.
 - **A `proxy_pass` to a container that does not operate stops all of nginx.** Method:
-  the restart of the nginx stack gave
-  `[emerg] host not found in upstream "overseerr"`, and the container went into a
-  restart loop. nginx resolves a `proxy_pass` host name at the time it reads the
+  the restart of the nginx stack gave `[emerg] host not found in upstream "..."` for an
+  unrelated service on the same server, and the container went into a restart loop. nginx resolves a `proxy_pass` host name at the time it reads the
   configuration. One container that is not in operation stops the full proxy. nginx
   had been in operation from before that container stopped, so the restart showed a
   fault that was already there. Start the backend stack, then look at
@@ -281,7 +280,6 @@ network. The session did not change `frontend/`.
 
 ## Open items
 
-- [ ] The two `overseerr` files in `~/docker/nginx-proxy/conf.d.disabled/`. Owner: Sam.
       Put them back after the container operates again, or change them to the
       `resolver` pattern.
 - [ ] The `Upgrade` and `Connection` headers in

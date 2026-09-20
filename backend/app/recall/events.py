@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from svix.webhooks import Webhook, WebhookVerificationError
@@ -27,11 +28,13 @@ class RecallEvent:
     `sub_code` is a plain string. Recall adds values without a notice, so a
     value that this code does not know must not stop the application.
     `payload` holds the full object for the chat loop and the voice loop.
+    `event_at` is the time of the event at Recall, in one format, or None.
     """
 
     name: str
     bot_id: str | None
     sub_code: str | None
+    event_at: str | None
     payload: dict[str, Any]
 
 
@@ -43,6 +46,19 @@ def _dig(payload: Mapping[str, Any], *keys: str) -> Any:
             return None
         value = value.get(key)
     return value
+
+
+def _event_time(value: Any) -> str | None:
+    """Put a Recall time in one format, for a comparison as text."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC).isoformat(timespec="microseconds")
 
 
 def verify_and_parse(raw_body: bytes, headers: Mapping[str, str]) -> RecallEvent:
@@ -83,5 +99,6 @@ def verify_and_parse(raw_body: bytes, headers: Mapping[str, str]) -> RecallEvent
         name=name,
         bot_id=str(bot_id) if bot_id else None,
         sub_code=str(sub_code) if sub_code else None,
+        event_at=_event_time(_dig(payload, "data", "data", "updated_at")),
         payload=payload,
     )

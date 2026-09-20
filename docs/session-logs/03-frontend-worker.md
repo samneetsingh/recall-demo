@@ -139,7 +139,6 @@ that page reads `/health` from the backend, which closes the last done criterion
       `~/docker/nginx-proxy/conf.d/recall-api.ss-ubuntu-01.net.conf`. Owner: Sam. Task 4
       needs them for the real-time transcript.
 - [ ] `backend/.env` on the homelab server. Owner: Sam. Task 2 needs the API keys.
-- [ ] The two `overseerr` files in `~/docker/nginx-proxy/conf.d.disabled/`. Owner: Sam.
 - [ ] The four open questions in [`../API_CONTRACT.md`](../API_CONTRACT.md). Owner: the
       task 2 session. The `recall-ai` MCP server is authorized and can answer them.
 

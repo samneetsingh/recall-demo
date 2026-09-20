@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.config import settings
-from app.db.models import SCHEMA, Mode, Role, Session, Status
+from app.db.models import MIGRATIONS, Mode, Role, Session, Status
 
 
 def _now() -> str:
@@ -40,9 +40,20 @@ def connect() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
-    """Make the sessions table if it does not exist."""
+    """Bring the database file to the newest schema version."""
     with connect() as connection:
-        connection.executescript(SCHEMA)
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        for index, statement in enumerate(MIGRATIONS[version:], start=version + 1):
+            connection.executescript(statement)
+            # PRAGMA does not accept a parameter. `index` is a position in
+            # MIGRATIONS, never a value from a request.
+            connection.execute(f"PRAGMA user_version = {index}")
+
+
+def schema_version() -> int:
+    """Give the schema version of the database file."""
+    with connect() as connection:
+        return int(connection.execute("PRAGMA user_version").fetchone()[0])
 
 
 def _fetch(connection: sqlite3.Connection, session_id: str) -> Session | None:
@@ -116,6 +127,33 @@ def get_session_by_bot_id(bot_id: str) -> Session | None:
             (bot_id,),
         ).fetchone()
         return Session.from_row(row) if row is not None else None
+
+
+def apply_bot_event(
+    session_id: str,
+    status: Status,
+    error_reason: str | None,
+    event_at: str | None,
+) -> bool:
+    """Apply a bot status event. Give False if the event changed nothing.
+
+    Recall delivers the events out of order, so the time of the event decides,
+    not the time it arrived. An event that is not newer than the last one is
+    refused, and a session that is `complete` does not change.
+    """
+    with connect() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE sessions
+               SET status = ?, error_reason = ?, updated_at = ?,
+                   last_event_at = COALESCE(?, last_event_at)
+             WHERE id = ?
+               AND status != 'complete'
+               AND (? IS NULL OR last_event_at IS NULL OR last_event_at < ?)
+            """,
+            (status, error_reason, _now(), event_at, session_id, event_at, event_at),
+        )
+        return cursor.rowcount > 0
 
 
 def set_summary(session_id: str, summary: dict[str, Any]) -> Session | None:

@@ -49,6 +49,18 @@ CREATE TABLE IF NOT EXISTS sessions (
 """
 
 
+# Schema migrations, in order
+#
+# Rule: an entry that shipped must never change and must never be removed. A
+# database in use has already applied it. A change goes at the end of the list.
+MIGRATIONS: list[str] = [
+    SCHEMA,
+    # The time of the last bot status event that the session applied. Recall
+    # delivers the events out of order, so the handler compares this value.
+    "ALTER TABLE sessions ADD COLUMN last_event_at TEXT;",
+]
+
+
 @dataclass(frozen=True)
 class Session:
     """The data of one session.
@@ -66,6 +78,7 @@ class Session:
     summary: dict[str, Any] | None
     created_at: str
     updated_at: str
+    last_event_at: str | None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> Session:
@@ -81,4 +94,5 @@ class Session:
             summary=json.loads(row["summary"]) if row["summary"] else None,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            last_event_at=row["last_event_at"],
         )

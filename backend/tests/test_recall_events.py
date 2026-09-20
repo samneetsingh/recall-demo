@@ -146,3 +146,75 @@ def test_a_realtime_event_gives_the_full_payload() -> None:
 
     assert event.name == "participant_events.chat_message"
     assert event.payload["data"]["data"]["text"] == "hello"
+
+
+def test_the_event_time_comes_from_the_payload() -> None:
+    body = _body(FATAL_PAYLOAD)
+
+    event = recall_events.verify_and_parse(body, signed_headers(body))
+
+    assert event.event_at == "2026-09-19T10:00:00.000000+00:00"
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        "2026-09-20T05:47:04.556000Z",
+        "2026-09-20T05:47:04.556000+00:00",
+        "2026-09-20T06:47:04.556000+01:00",
+    ],
+)
+def test_the_same_moment_gives_the_same_text(written: str) -> None:
+    """A text comparison is correct only if each value has one shape."""
+    payload = {
+        "event": "bot.in_call_recording",
+        "data": {"data": {"updated_at": written}, "bot": {"id": "bot-1"}},
+    }
+    body = _body(payload)
+
+    event = recall_events.verify_and_parse(body, signed_headers(body))
+
+    assert event.event_at == "2026-09-20T05:47:04.556000+00:00"
+
+
+def test_a_later_time_sorts_after_an_earlier_one_as_text() -> None:
+    """The store compares the values with SQL `<`, so the order must hold."""
+    times = []
+    for written in [
+        "2026-09-20T05:47:04.508000Z",
+        "2026-09-20T05:47:04.556000Z",
+        "2026-09-20T05:48:00.000000Z",
+        "2026-09-21T00:00:00.000000Z",
+    ]:
+        payload = {
+            "event": "bot.done",
+            "data": {"data": {"updated_at": written}, "bot": {"id": "bot-1"}},
+        }
+        body = _body(payload)
+        times.append(recall_events.verify_and_parse(body, signed_headers(body)).event_at)
+
+    assert times == sorted(times)
+
+
+@pytest.mark.parametrize("bad", ["", "not a time", "2026-13-45", None, 17])
+def test_a_time_that_does_not_parse_gives_none(bad: object) -> None:
+    """An event with no usable time is applied, so it must not raise."""
+    payload = {
+        "event": "bot.in_call_recording",
+        "data": {"data": {"updated_at": bad}, "bot": {"id": "bot-1"}},
+    }
+    body = _body(payload)
+
+    event = recall_events.verify_and_parse(body, signed_headers(body))
+
+    assert event.event_at is None
+
+
+def test_a_payload_with_no_data_block_gives_no_time() -> None:
+    """The shape of the dashboard test webhook."""
+    payload = {"event": "bot.done", "data": {"bot": {"id": "bot-1"}}}
+    body = _body(payload)
+
+    event = recall_events.verify_and_parse(body, signed_headers(body))
+
+    assert event.event_at is None

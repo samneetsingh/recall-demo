@@ -165,7 +165,6 @@ again.
 - [ ] The `Upgrade` and `Connection` headers in the nginx configuration. Owner: Sam.
       `../API_CONTRACT.md` says that the real-time transcript can use a webhook, so this
       item is no longer a condition for mode 2. Keep it as an option.
-- [ ] The two `overseerr` files in `~/docker/nginx-proxy/conf.d.disabled/`. Owner: Sam.
 
 ## Next session starts here
 

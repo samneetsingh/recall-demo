@@ -89,20 +89,23 @@ def handle_event(event: RecallEvent) -> None:
         logger.warning("no session has bot id %s, no change", event.bot_id)
         return
 
-    if session.status == "complete":
-        logger.info("session %s is complete, event %s makes no change", session.id, event.name)
-        return
-
     if event.name == "bot.call_ended":
         # The call stopped before the assessment was complete, so the session has no
         # summary. `error` is the only terminal status that is not `complete`.
         # The prefix shows that the call ended in a normal manner.
-        reason = f"call_ended:{event.sub_code or 'unknown'}"
-        session_store.set_status(session.id, "error", reason)
-        logger.info("session %s ended early: %s", session.id, reason)
+        status: Status = "error"
+        reason: str | None = f"call_ended:{event.sub_code or 'unknown'}"
+    else:
+        status = BOT_EVENT_STATUS[event.name]
+        reason = event.sub_code if event.name in ERROR_EVENTS else None
+        
+    if not session_store.apply_bot_event(session.id, status, reason, event.event_at):
+        logger.info(
+            "session %s did not take event %s of %s, no change",
+            session.id,
+            event.name,
+            event.event_at,
+        )
         return
 
-    status = BOT_EVENT_STATUS[event.name]
-    reason = event.sub_code if event.name in ERROR_EVENTS else None
-    session_store.set_status(session.id, status, reason)
     logger.info("session %s is now %s, event %s", session.id, status, event.name)

@@ -100,6 +100,13 @@ A status that is `complete` does not change. An event name that the backend does
 know gives HTTP 200 and makes no change. The `sub_code` is a plain string, not an enum:
 Recall adds values without a notice.
 
+**The order of the events does not change the result.** Webhook delivery is at-least-once
+and has no order, and Recall was seen to send `bot.in_waiting_room` before
+`bot.joining_call`. The backend uses the time of the event, `data.data.updated_at`, and
+not the time it arrived. An event that is not newer than the last one that the session
+applied gives HTTP 200 and makes no change. A duplicate event thus changes nothing. An
+event with no time is applied, because a true event must not be lost.
+
 ## Extending this
 
 To add a new interaction mode, add a value to `mode`, implement the matching input/

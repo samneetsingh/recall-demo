@@ -1,5 +1,6 @@
 """The tests of POST /webhooks/recall and the map from an event to a status."""
 
+import itertools
 import json
 
 import pytest
@@ -223,3 +224,119 @@ def test_a_realtime_event_gives_200_and_no_status_change(
     session = session_store.get_session(session_id)
     assert session is not None
     assert session.status == "waiting_for_bot"
+
+
+# The four events of the live test of session 05, with the times that Recall
+# gave them. Recall sent them out of order: `bot.in_waiting_room` went out
+# before `bot.joining_call`. See ../../docs/task-02-event-ordering/todo.md.
+LIVE_EVENTS = [
+    ("bot.joining_call", "2026-09-20T05:47:04.508000Z"),
+    ("bot.in_waiting_room", "2026-09-20T05:47:04.524000Z"),
+    ("bot.in_call_not_recording", "2026-09-20T05:47:04.532000Z"),
+    ("bot.in_call_recording", "2026-09-20T05:47:04.556000Z"),
+]
+
+
+def _timed_event(name: str, updated_at: str | None, bot_id: str) -> dict:
+    data: dict = {"bot": {"id": bot_id, "metadata": {}}}
+    if updated_at is not None:
+        data["data"] = {"code": name.split(".")[-1], "updated_at": updated_at}
+    return {"event": name, "data": data}
+
+
+def _session_with_bot(bot_id: str) -> str:
+    session = session_store.create_session(MEETING_URL)
+    session_store.set_bot_id(session.id, bot_id)
+    session_store.set_status(session.id, "waiting_for_bot")
+    return session.id
+
+
+@pytest.mark.parametrize("order", list(itertools.permutations(LIVE_EVENTS)))
+def test_every_order_of_the_live_events_ends_in_progress(
+    client: TestClient, order: tuple
+) -> None:
+    """Recall has no delivery order. Each of the 24 orders must give the same end."""
+    bot_id = f"bot-order-{abs(hash(order))}"
+    session_id = _session_with_bot(bot_id)
+
+    for name, updated_at in order:
+        result = _post(client, _timed_event(name, updated_at, bot_id))
+        assert result.status_code == 200
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "in_progress", f"order {[n for n, _ in order]}"
+
+
+def test_a_late_event_does_not_put_back_an_old_status(
+    client: TestClient, session_id: str
+) -> None:
+    """The failure this task prevents: the bot is recording, the session is not."""
+    _post(client, _timed_event("bot.in_call_recording", LIVE_EVENTS[3][1], BOT_ID))
+    _post(client, _timed_event("bot.in_call_not_recording", LIVE_EVENTS[2][1], BOT_ID))
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "in_progress"
+
+
+def test_the_same_event_two_times_changes_the_session_one_time(
+    client: TestClient, session_id: str
+) -> None:
+    """Svix delivers at least one time, so a duplicate is normal."""
+    payload = _timed_event("bot.in_call_recording", LIVE_EVENTS[3][1], BOT_ID)
+
+    assert _post(client, payload).status_code == 200
+    first = session_store.get_session(session_id)
+    assert _post(client, payload).status_code == 200
+    second = session_store.get_session(session_id)
+
+    assert first is not None and second is not None
+    assert first.status == second.status == "in_progress"
+    assert first.updated_at == second.updated_at
+
+
+def test_an_event_with_no_time_is_applied(client: TestClient, session_id: str) -> None:
+    """The test webhook of the dashboard has no `data.data`. Do not lose a true event."""
+    result = _post(client, _timed_event("bot.in_call_recording", None, BOT_ID))
+
+    assert result.status_code == 200
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "in_progress"
+    assert session.last_event_at is None
+
+
+def test_an_event_with_no_time_keeps_the_last_time(
+    client: TestClient, session_id: str
+) -> None:
+    _post(client, _timed_event("bot.in_call_recording", LIVE_EVENTS[3][1], BOT_ID))
+    before = session_store.get_session(session_id)
+
+    _post(client, _timed_event("bot.in_call_not_recording", None, BOT_ID))
+    after = session_store.get_session(session_id)
+
+    assert before is not None and after is not None
+    assert after.last_event_at == before.last_event_at
+
+
+def test_an_old_event_does_not_change_a_complete_session(
+    client: TestClient, session_id: str
+) -> None:
+    session_store.set_status(session_id, "complete")
+
+    _post(client, _timed_event("bot.in_call_recording", LIVE_EVENTS[3][1], BOT_ID))
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "complete"
+
+
+def test_the_event_time_is_stored_in_one_format(
+    client: TestClient, session_id: str
+) -> None:
+    _post(client, _timed_event("bot.in_call_recording", LIVE_EVENTS[3][1], BOT_ID))
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.last_event_at == "2026-09-20T05:47:04.556000+00:00"
