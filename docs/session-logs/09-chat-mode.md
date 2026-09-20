@@ -201,13 +201,15 @@ same, which is the test of the mode boundary of session 07, and it passed a seco
       closing line went out, and the summary is on the public URL.
 - [x] **The order of the first two messages.** Repaired. The backend sends the notice
       with `pin`, immediately before the first question.
-- [ ] **Deploy the notice change, and prove the order in a second live call.** The
-      server runs the code of the first call. The order and the pin are proved by the
-      tests only. Owner: Sam.
-- [ ] **Is `pin` the correct field name of the send endpoint?** Recall does not publish
-      the schema of `SendChatMessageInputRequest`, and the document says only that the
-      endpoint "allows you to pin messages". The name is from the Desktop SDK document.
-      A live check against the bot of the first call answers it. Owner: Sam.
+- [x] **Deploy the notice change, and prove the order in a second live call.** Done in
+      session 10. The notice went out at 08:56:18.327 and the first question at
+      08:56:20.437, so the order is correct on the server. See
+      [`10-frontend.md`](10-frontend.md).
+- [x] **Is `pin` the correct field name of the send endpoint?** Yes. The live call of
+      session 10 sent `{"to": "everyone", "message": ..., "pin": true}`, the endpoint
+      gave HTTP 200, and **the notice was pinned in the Meet chat**. The HTTP 200 alone
+      is not the proof, because an API that ignores an unknown key also gives 200. The
+      pin in the interface is the proof. See [`10-frontend.md`](10-frontend.md).
 - [ ] **Is the `webhook-id` of a real-time retry the same each time?** The repeat
       protection of a chat turn is that header. Svix keeps the id for a dashboard event.
       Recall retries a real-time message with its own policy, and the document does not

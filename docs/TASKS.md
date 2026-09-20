@@ -109,15 +109,30 @@ works end to end.
 
 ## 7. Frontend
 
-- [ ] Meeting URL input, submits to backend.
-- [ ] Status display, polls backend.
-- [ ] Summary display once complete.
+One page of plain HTML and JS, `frontend/public/index.html`. No framework, no build
+step and no new dependency. See `task-07-frontend/todo.md`.
+
+- [x] Meeting URL input, submits to backend. `POST /sessions` with the mode `chat`.
+      The session id goes in the URL query string, so a reload keeps the session.
+- [x] Status display, polls backend. `GET /sessions/{id}` every 2.5 seconds, with a
+      `setTimeout` chain, until the status is `complete` or `error`. Each status gives
+      an instruction: `waiting_for_bot` says to admit the bot to the call, with the
+      elapsed time. A failed poll does not stop the poll, and HTTP 404 does.
+- [x] Summary display once complete. The eight fields of `GET /sessions/{id}/summary`.
+      `not discussed` is muted, and a value that starts with `RED FLAG:` is in the
+      alert color. The text is never changed.
+- [x] The error path. The status `error` shows `error_reason` as it is, in monospace.
+      Proved with a real Recall refusal on the live backend.
+- [x] The `/health` check of item 1d is out of `public/index.html`.
 
 ## 8. Deploy for real
 
 - [ ] Backend deployed on the homelab server, tunnel live.
-- [ ] Frontend deployed to Workers.
-- [ ] Full flow tested against the live URLs, not localhost.
+- [x] Frontend deployed to Workers. Version `c2219c53-0508-4f92-9777-b61007307f0c`
+      on `recall.samneet.com`, 2026-09-20.
+- [x] Full flow tested against the live URLs, not localhost. 2026-09-20:
+      `recall.samneet.com` made session `ae72c30fdd8b40fb987a03ea24cfe7e4`, the bot
+      joined, the intake ran in the chat, and the eight fields came on the page.
 
 ## 8a. Prompt tuning (an optimization, near the end)
 

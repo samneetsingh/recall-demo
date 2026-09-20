@@ -8,9 +8,13 @@ this file for the path of one request.
 
 ## Read this first
 
-Sections 1 to 5 of [`TASKS.md`](TASKS.md) are complete. A live Google Meet call proved
-the full path on 2026-09-20: the bot joined, it interviewed a patient in the chat, and
-`GET /sessions/{id}/summary` gave the eight fields.
+Sections 1 to 5 and section 7 of [`TASKS.md`](TASKS.md) are complete. A live Google
+Meet call proved the full path on 2026-09-20: the bot joined, it interviewed a patient
+in the chat, and `GET /sessions/{id}/summary` gave the eight fields.
+
+**The page calls the backend now.** Section 7 made `frontend/public/index.html`: a
+meeting URL goes in, the page polls the status, and the eight fields come on the page at
+the end. It is on `recall.samneet.com`. Part 8 says what it reads.
 
 **The webhook drives the engine now.** Section 5 made `modes/chat.py`, put it in the
 `MODES` registry, and added the two calls that were absent: `loop.start_intake` when the
@@ -256,12 +260,50 @@ in the same statement as the write.
 
 ## 8. What the frontend reads
 
-Two routes and nothing else. The frontend never learns the mode.
+`frontend/public/index.html` is one page of plain HTML and JS. It is on
+`recall.samneet.com`, and it operates against the live backend. **Three routes and
+nothing else. The frontend never learns the mode.**
 
 | Route | When | Gives |
 |---|---|---|
-| `GET /sessions/{id}` | every 2 to 3 seconds | `status`, `error_reason`, `summary` |
+| `POST /sessions` | one time, on submit | `session_id` and `status`. The body is `{meeting_url, mode: "chat"}` |
+| `GET /sessions/{id}` | every 2.5 seconds | `status`, `error_reason`, `summary` |
 | `GET /sessions/{id}/summary` | one time, after `complete` | The eight fields |
+
+**The page renders from the poll only.** The status in the answer to `POST /sessions`
+is not used: a Recall failure also gives HTTP 201, with the status `error` and no
+reason, and only the poll has the reason. One source of truth cannot disagree with
+itself.
+
+**The session id is in the URL query string**, `?session=<id>`, with
+`history.replaceState`. A reload keeps the session, and a link continues one. It is not
+in `localStorage`: `IMPLEMENTATION.md` gives this rule for a demo that has one session.
+
+**The poll stops for two conditions only:** the status is `complete` or `error`, which
+are the terminal states of part 7, or the route gives HTTP 404, which says that no
+session has this id. **A failed request does not stop the poll.** The backend is on a
+home server behind a tunnel, so the page shows a warning, keeps the last known status,
+and sends the next request at the usual time.
+
+**The mode is a constant in the page.** It is `chat`. Voice mode is section 6 of
+`TASKS.md` and it has no implementation, so a session with the mode `voice` goes to
+`error`. There is no control for it, and the page has nothing else that is
+mode-specific.
+
+**What the page does not read.** There is no route for the `turns` table, so the page
+does not show the conversation. The patient reads the questions in the meeting chat,
+where the bot sends them. A turns view needs a backend route first.
+
+**Three texts of the backend go on the page without a change:**
+
+| Text | Where it comes from | Why it is not changed |
+|---|---|---|
+| `error_reason` | the session row | It is the only text that says why the bot did not join. `IMPLEMENTATION.md` gives this rule |
+| `not discussed` | a summary field that the intake did not cover | The intake asks a small number of questions, so this is usual and it is not a fault. The page makes it muted and does not hide it |
+| `RED FLAG:` | the start of `associated_symptoms` | The page gives it the alert color. The words are the words that the model wrote |
+
+An HTTP 500 from `GET /sessions/{id}/summary` also goes on the page. The backend calls
+that a fault of its own, and the page does not hide a fault of the backend.
 
 ## 9. What is not built, and what is weak
 

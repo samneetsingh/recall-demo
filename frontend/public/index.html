@@ -11,6 +11,7 @@
     --fg: #1b1b19;
     --muted: #6b6b66;
     --line: #e3e3df;
+    --field: #ffffff;
     --ok: #1f7a46;
     --bad: #b03030;
   }
@@ -20,11 +21,13 @@
       --fg: #ececea;
       --muted: #9a9a94;
       --line: #2e2e33;
+      --field: #1f1f23;
       --ok: #5fc98b;
       --bad: #e58080;
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body {
     margin: 0;
     padding: 48px 16px;
@@ -55,7 +58,7 @@
   .row { display: flex; gap: 10px; align-items: baseline; }
   .dot {
     width: 9px; height: 9px; border-radius: 50%;
-    background: var(--muted); flex: none; transform: translateY(-1px);
+    background: var(--muted); flex: none; transform: translateY(6px);
   }
   .dot.ok { background: var(--ok); }
   .dot.bad { background: var(--bad); }
@@ -66,6 +69,67 @@
   }
   footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--line); padding-top: 16px; }
   a { color: inherit; }
+
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+  input[type="url"] {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--field);
+    color: var(--fg);
+    font: inherit;
+  }
+  input[type="url"]:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+  button {
+    margin-top: 12px;
+    padding: 10px 16px;
+    border: 1px solid var(--fg);
+    border-radius: 8px;
+    background: var(--fg);
+    color: var(--bg);
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.55; cursor: default; }
+  button.link {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font-weight: 400;
+    text-decoration: underline;
+  }
+
+  .headline { margin: 0 0 4px; font-weight: 600; }
+  .detail { margin: 0; color: var(--muted); }
+  .meta { margin: 14px 0 0; font-size: 0.85rem; color: var(--muted); }
+  .note { margin: 12px 0 0; font-size: 0.85rem; color: var(--muted); }
+  .alert { margin: 12px 0 0; font-size: 0.9rem; color: var(--bad); }
+
+  pre {
+    margin: 0;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--field);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  dl { margin: 0; display: grid; grid-template-columns: 11rem 1fr; gap: 10px 20px; }
+  dt { font-size: 0.85rem; color: var(--muted); }
+  dd { margin: 0; }
+  dd.absent { color: var(--muted); }
+  dd.flag { color: var(--bad); font-weight: 600; }
+  @media (max-width: 34rem) {
+    dl { grid-template-columns: 1fr; gap: 2px 0; }
+    dd { margin-bottom: 12px; }
+  }
 </style>
 </head>
 <body>
@@ -78,17 +142,47 @@
     the pre-visit questionnaire of a headache clinic. The bot gives a structured clinical
     summary at the end of the call.
   </p>
-  <p>
-    This page is a placeholder. The user interface will be built in a future task.
-  </p>
 
-  <section class="card">
-    <h2>Backend connection</h2>
+  <section class="card" id="form-card">
+    <h2>Start an intake</h2>
+    <form id="start-form" novalidate>
+      <label for="meeting-url">Google Meet URL</label>
+      <input id="meeting-url" type="url" required autocomplete="off" spellcheck="false"
+             placeholder="https://meet.google.com/abc-defg-hij">
+      <button id="start-button" type="submit">Send the bot</button>
+    </form>
+    <p class="note">
+      The bot joins the call and asks its questions in the meeting chat. Keep this page
+      open: the summary comes here.
+    </p>
+    <p class="alert" id="form-error" hidden></p>
+  </section>
+
+  <section class="card" id="status-card" hidden aria-live="polite">
+    <h2>Status</h2>
     <div class="row">
       <span class="dot" id="dot"></span>
-      <span id="status">The check is in operation&hellip;</span>
+      <div>
+        <p class="headline" id="status-headline"></p>
+        <p class="detail" id="status-detail"></p>
+      </div>
     </div>
+    <p class="meta" id="status-meta"></p>
+    <p class="alert" id="poll-warning" hidden></p>
   </section>
+
+  <section class="card" id="error-card" hidden>
+    <h2>Why the session stopped</h2>
+    <pre id="error-reason"></pre>
+  </section>
+
+  <section class="card" id="summary-card" hidden>
+    <h2>Clinical summary</h2>
+    <dl id="summary-fields"></dl>
+    <p class="alert" id="summary-error" hidden></p>
+  </section>
+
+  <p id="again-row" hidden><button type="button" class="link" id="again">New session</button></p>
 
   <footer>
     Built on the Recall.ai Meeting Bot API.
@@ -96,24 +190,264 @@
 </main>
 
 <script>
-  // Infrastructure check only. It proves that a browser request from this origin to the
-  // backend passes CORS. Task 7 replaces this section with the real user interface.
   const API = "https://recall-api.ss-ubuntu-01.net";
-  const dot = document.getElementById("dot");
-  const status = document.getElementById("status");
+  const POLL_MS = 2500;
 
-  fetch(API + "/health", { method: "GET" })
-    .then((r) => r.json().then((body) => ({ ok: r.ok, code: r.status, body })))
-    .then(({ ok, code, body }) => {
-      if (!ok) throw new Error("HTTP " + code);
-      dot.className = "dot ok";
-      status.innerHTML = 'The backend answers. <code>/health</code> gives <code>' +
-        JSON.stringify(body) + "</code>";
-    })
-    .catch((err) => {
-      dot.className = "dot bad";
-      status.innerHTML = "The backend does not answer. <code>" + String(err) + "</code>";
-    });
+  // Voice mode is section 6 of docs/TASKS.md and it has no implementation. A session
+  // with the mode `voice` goes to `error`, so the mode is a constant and not a control.
+  const MODE = "chat";
+
+  // The order and the labels are from docs/SPEC.md.
+  const FIELDS = [
+    ["chief_complaint", "Chief complaint"],
+    ["onset_duration", "Onset and duration"],
+    ["location_character", "Location and character"],
+    ["severity", "Severity"],
+    ["triggers", "Triggers"],
+    ["associated_symptoms", "Associated symptoms"],
+    ["prior_treatments", "Prior treatments"],
+    ["notes", "Notes"],
+  ];
+
+  const STATES = {
+    creating_bot: {
+      headline: "The bot starts.",
+      detail: "The backend asks Recall for a bot.",
+    },
+    waiting_for_bot: {
+      headline: "Admit the bot to your Google Meet call.",
+      detail: "The bot waits at the door. Let it in to start the intake.",
+    },
+    in_progress: {
+      headline: "The intake is in operation.",
+      detail: "Answer the questions of the bot in the meeting chat. The summary comes to this page at the end.",
+    },
+    complete: {
+      headline: "The intake is complete.",
+      detail: "The summary is below.",
+    },
+    error: {
+      headline: "The session stopped.",
+      detail: "The reason from the backend is below.",
+    },
+  };
+
+  const el = (id) => document.getElementById(id);
+  const form = el("start-form");
+  const input = el("meeting-url");
+  const button = el("start-button");
+
+  let sessionId = null;
+  let pollTimer = null;
+  let clockTimer = null;
+  let startedAt = 0;
+
+  // --- the form ---------------------------------------------------------------
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const url = input.value.trim();
+    if (url === "") {
+      showFormError("Give the URL of a Google Meet call.");
+      return;
+    }
+    el("form-error").hidden = true;
+    button.disabled = true;
+
+    try {
+      // No slash at the end. The route is `/sessions` exactly, and a slash gives an
+      // HTTP 307 to a different URL, which is a second CORS test.
+      const answer = await fetch(API + "/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meeting_url: url, mode: MODE }),
+      });
+      const text = await answer.text();
+      if (answer.status !== 201) {
+        showFormError("HTTP " + answer.status + " — " + text);
+        return;
+      }
+      // The page renders from the poll only. A Recall failure also gives HTTP 201,
+      // with the status `error`, and the reason is in the poll and not here.
+      const body = JSON.parse(text);
+      history.replaceState(null, "", "?session=" + encodeURIComponent(body.session_id));
+      follow(body.session_id);
+    } catch (failure) {
+      showFormError("The backend does not answer. " + String(failure));
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  function showFormError(text) {
+    const box = el("form-error");
+    box.textContent = text;
+    box.hidden = false;
+  }
+
+  el("again").addEventListener("click", () => {
+    stopTimers();
+    sessionId = null;
+    lastStatus = "";
+    history.replaceState(null, "", location.pathname);
+    el("status-card").hidden = true;
+    el("error-card").hidden = true;
+    el("summary-card").hidden = true;
+    el("summary-error").hidden = true;
+    el("poll-warning").hidden = true;
+    el("form-error").hidden = true;
+    el("again-row").hidden = true;
+    el("form-card").hidden = false;
+    input.value = "";
+    input.focus();
+  });
+
+  // --- the poll ---------------------------------------------------------------
+
+  function follow(id) {
+    sessionId = id;
+    startedAt = Date.now();
+    el("form-card").hidden = true;
+    el("status-card").hidden = false;
+    el("again-row").hidden = false;
+    // The first poll gives the true status. Do not name one before it arrives.
+    el("status-headline").textContent = "The page reads the session.";
+    el("status-detail").textContent = "";
+    clockTimer = setInterval(renderMeta, 1000);
+    poll();
+  }
+
+  async function poll() {
+    let terminal = false;
+    try {
+      const answer = await fetch(API + "/sessions/" + encodeURIComponent(sessionId));
+      if (answer.status === 404) {
+        stopTimers();
+        fatal("No session has this id.", "The link is old, or the backend lost this row. Start a new session.");
+        return;
+      }
+      if (!answer.ok) throw new Error("HTTP " + answer.status);
+
+      const body = await answer.json();
+      el("poll-warning").hidden = true;
+      setState(body);
+
+      if (body.status === "complete") {
+        terminal = true;
+        stopTimers();
+        await loadSummary();
+      } else if (body.status === "error") {
+        terminal = true;
+        stopTimers();
+      }
+    } catch (failure) {
+      // The backend is on a home server behind a tunnel. A short interruption must
+      // not end the session on this page, so the next request goes out as usual.
+      const warning = el("poll-warning");
+      warning.textContent = "The backend does not answer. The page tries again. " + String(failure);
+      warning.hidden = false;
+    }
+    if (!terminal) pollTimer = setTimeout(poll, POLL_MS);
+  }
+
+  function stopTimers() {
+    clearTimeout(pollTimer);
+    clearInterval(clockTimer);
+    pollTimer = null;
+    clockTimer = null;
+  }
+
+  // --- the status -------------------------------------------------------------
+
+  let lastStatus = "";
+
+  function setState(body) {
+    lastStatus = body.status;
+    // A status that this page does not know shows the word as it is. The backend can
+    // add one, and an unknown word is better than an empty page.
+    const state = STATES[body.status] || { headline: body.status, detail: "" };
+    el("status-headline").textContent = state.headline;
+    el("status-detail").textContent = state.detail;
+    el("dot").className = "dot" + (body.status === "complete" ? " ok" : body.status === "error" ? " bad" : "");
+    renderMeta();
+
+    if (body.status === "error") {
+      el("error-reason").textContent = body.error_reason || "The backend gave no reason.";
+      el("error-card").hidden = false;
+    }
+  }
+
+  function fatal(headline, detail) {
+    el("status-headline").textContent = headline;
+    el("status-detail").textContent = detail;
+    el("dot").className = "dot bad";
+    el("poll-warning").hidden = true;
+    el("status-meta").textContent = "";
+  }
+
+  function renderMeta() {
+    if (lastStatus === "") return;
+    if (lastStatus === "complete" || lastStatus === "error") {
+      el("status-meta").textContent = lastStatus;
+      return;
+    }
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    const time = seconds < 60
+      ? seconds + " s"
+      : Math.floor(seconds / 60) + " min " + (seconds % 60) + " s";
+    el("status-meta").textContent = lastStatus + " · " + time + " on this page";
+  }
+
+  // --- the summary ------------------------------------------------------------
+
+  async function loadSummary() {
+    el("summary-card").hidden = false;
+    try {
+      const answer = await fetch(API + "/sessions/" + encodeURIComponent(sessionId) + "/summary");
+      const text = await answer.text();
+      if (!answer.ok) {
+        // HTTP 500 is a session that is complete and has no summary. The backend
+        // calls that a fault of its own, so the page does not hide it.
+        showSummaryError("HTTP " + answer.status + " — " + text);
+        return;
+      }
+      renderSummary(JSON.parse(text));
+    } catch (failure) {
+      showSummaryError("The summary did not arrive. " + String(failure));
+    }
+  }
+
+  function renderSummary(summary) {
+    const list = el("summary-fields");
+    list.textContent = "";
+    for (const [key, label] of FIELDS) {
+      const value = typeof summary[key] === "string" ? summary[key] : "";
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const item = document.createElement("dd");
+      // textContent, never innerHTML: the summary holds words that a patient typed
+      // and a model wrote.
+      item.textContent = value;
+      if (/^not discussed\.?$/i.test(value.trim())) {
+        // The intake asks a small number of questions, so this text is usual.
+        item.className = "absent";
+      } else if (key === "associated_symptoms" && value.trim().startsWith("RED FLAG:")) {
+        item.className = "flag";
+      }
+      list.append(term, item);
+    }
+  }
+
+  function showSummaryError(text) {
+    const box = el("summary-error");
+    box.textContent = text;
+    box.hidden = false;
+  }
+
+  // --- the start --------------------------------------------------------------
+
+  const fromUrl = new URLSearchParams(location.search).get("session");
+  if (fromUrl) follow(fromUrl); else input.focus();
 </script>
 </body>
 </html>
