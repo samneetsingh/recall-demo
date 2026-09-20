@@ -46,7 +46,17 @@ useful in noisy environments or for accessibility, not just a backup plan.
 
 ## The mock intake engine
 
-- Powered by an LLM through LiteLLM. Not the real FIRY AI logic.
+- Powered by an LLM through the `openai` SDK. Not the real FIRY AI logic. LiteLLM was
+  the first choice, but the workspace has one provider, so the SDK is one package
+  instead of a large tree.
+- The model answers with one JSON object against a strict schema: an action to ask a
+  question, or an action that says the intake is complete.
+- The engine counts the turns and applies the limit, `INTAKE_MAX_TURNS`. A model does
+  not always keep a limit that a prompt gives it.
+- A turn is one message from each party: a question and its answer. The conversation is
+  half-duplex in both modes. One full patient message goes in, the assistant answers it,
+  and only then does the next message go in. A message that arrives before the answer is
+  refused, not queued.
 - Prompted to run a headache/neurology-style intake: chief complaint, onset, duration,
   location, character of pain, severity, triggers, associated symptoms, prior
   treatments tried.

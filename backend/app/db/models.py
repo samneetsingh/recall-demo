@@ -29,10 +29,7 @@ Mode = Literal["chat", "voice"]
 # The speaker of one turn in the conversation log.
 Role = Literal["bot", "patient"]
 
-# The database schema as defined in the architecture doc.
-#
-# This project has no migrations framework, so a column that comes later needs
-# a new database file.
+# The first schema. This is migration 1, so it must never change.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id            TEXT PRIMARY KEY,
@@ -58,14 +55,65 @@ MIGRATIONS: list[str] = [
     # The time of the last bot status event that the session applied. Recall
     # delivers the events out of order, so the handler compares this value.
     "ALTER TABLE sessions ADD COLUMN last_event_at TEXT;",
+    # The conversation log, which was a JSON array in `sessions.transcript`.
+    # An INSERT cannot lose a turn, and the unique index refuses an event that
+    # Recall delivers more than one time.
+    """
+    CREATE TABLE IF NOT EXISTS turns (
+        id          INTEGER PRIMARY KEY,
+        session_id  TEXT NOT NULL,
+        role        TEXT NOT NULL,
+        text        TEXT NOT NULL,
+        event_id    TEXT,
+        created_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS turns_session ON turns(session_id, id);
+    CREATE UNIQUE INDEX IF NOT EXISTS turns_event ON turns(session_id, event_id);
+    """,
+    # Move each entry of the old JSON array into a row, in order.
+    """
+    INSERT INTO turns (session_id, role, text, created_at)
+    SELECT s.id,
+           json_extract(t.value, '$.role'),
+           json_extract(t.value, '$.text'),
+           s.updated_at
+      FROM sessions s, json_each(COALESCE(s.transcript, '[]')) t;
+    """,
+    "ALTER TABLE sessions DROP COLUMN transcript;",
 ]
+
+
+@dataclass(frozen=True)
+class Turn:
+    """One turn of the conversation. The `id` gives the order."""
+
+    id: int
+    session_id: str
+    role: Role
+    text: str
+    event_id: str | None
+    created_at: str
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Turn:
+        """Make a turn from one database row."""
+        return cls(
+            id=row["id"],
+            session_id=row["session_id"],
+            role=row["role"],
+            text=row["text"],
+            event_id=row["event_id"],
+            created_at=row["created_at"],
+        )
 
 
 @dataclass(frozen=True)
 class Session:
     """The data of one session.
-    ``transcript`` and ``summary`` are JSON text in the database and Python
-    objects here.
+
+    The conversation log is not here. It is in the `turns` table, and
+    ``session_store.get_turns`` reads it. ``summary`` is JSON text in the
+    database and a Python object here.
     """
 
     id: str
@@ -74,7 +122,6 @@ class Session:
     status: Status
     error_reason: str | None
     bot_id: str | None
-    transcript: list[dict[str, str]]
     summary: dict[str, Any] | None
     created_at: str
     updated_at: str
@@ -90,7 +137,6 @@ class Session:
             status=row["status"],
             error_reason=row["error_reason"],
             bot_id=row["bot_id"],
-            transcript=json.loads(row["transcript"]),
             summary=json.loads(row["summary"]) if row["summary"] else None,
             created_at=row["created_at"],
             updated_at=row["updated_at"],

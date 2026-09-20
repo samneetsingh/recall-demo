@@ -19,21 +19,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
-# The stub summary.
-#
-# `GET /sessions/{id}/summary` gives this object when the status is `complete`
-# and the database holds no summary.
-STUB_SUMMARY: dict[str, str] = {
-    "chief_complaint": "STUB. No intake engine at this time.",
-    "onset_duration": "STUB",
-    "location_character": "STUB",
-    "severity": "STUB",
-    "triggers": "STUB",
-    "associated_symptoms": "STUB",
-    "prior_treatments": "STUB",
-    "notes": "This summary is stub data from the backend skeleton.",
-}
-
 
 class CreateSessionRequest(BaseModel):
     """The body of `POST /sessions`."""
@@ -115,4 +100,10 @@ def get_summary(session_id: str) -> dict[str, Any]:
             status_code=404,
             detail=f"the session is not complete, the status is {session.status}",
         )
-    return session.summary or STUB_SUMMARY
+    if session.summary is None:
+        # `engine/loop.py` writes the summary before the status, so a complete
+        # session with no summary is a fault of the backend. Do not hide it.
+        raise HTTPException(
+            status_code=500, detail="the session is complete and has no summary"
+        )
+    return session.summary

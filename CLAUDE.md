@@ -26,7 +26,7 @@ patient the way a headache/neurology intake would, and produces a structured cli
 summary at the end.
 
 The demo is not the real FIRY AI system. The intake logic is a mock, built with an LLM
-through LiteLLM. Do not port real FIRY code into this repo.
+through the `openai` SDK.
 
 ## Repo layout
 
@@ -44,8 +44,7 @@ different places and can fail independently.
 
 ## Stack
 
-- Backend: FastAPI, Poetry, SQLite, LiteLLM (for the mock intake engine), Recall.ai
-  Python SDK or plain HTTP calls, OpenAI TTS.
+- Backend: FastAPI, Poetry, SQLite, the `openai` SDK (for the mock intake engine), Recall.ai Python SDK or plain HTTP calls, OpenAI TTS.
 - Frontend: plain HTML/JS (or minimal framework), Cloudflare Workers, calls the backend
   over HTTPS.
 - Transcription: Recall.ai's own transcription provider.

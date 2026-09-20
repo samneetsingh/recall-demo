@@ -15,6 +15,8 @@ os.environ["RECALL_WEBHOOK_SECRET"] = TEST_WEBHOOK_SECRET
 os.environ["RECALL_API_KEY"] = "test-recall-api-key"
 os.environ["RECALL_API_BASE"] = "https://us-west-2.recall.ai"
 os.environ["PUBLIC_BASE_URL"] = "https://recall-api.example.test"
+os.environ["OPENAI_API_KEY"] = "test-openai-api-key"
+os.environ["OPENAI_MODEL"] = "gpt-4o-mini"
 
 from datetime import UTC, datetime  # noqa: E402
 

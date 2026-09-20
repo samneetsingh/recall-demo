@@ -5,8 +5,8 @@ from fastapi.testclient import TestClient
 
 from app.db import session_store
 from app.recall.client import RecallError
+from app.engine import prompts
 from app.routes import sessions as sessions_route
-from app.routes.sessions import STUB_SUMMARY
 
 MEETING_URL = "https://meet.google.com/abc-defg-hij"
 FAKE_BOT_ID = "bot-test-0001"
@@ -89,9 +89,10 @@ def test_get_summary_gives_404_before_the_session_is_complete(
     assert "waiting_for_bot" in result.json()["detail"]
 
 
-def test_get_summary_gives_the_stub_when_no_engine_wrote_one(
+def test_get_summary_gives_500_when_a_complete_session_has_no_summary(
     client: TestClient,
 ) -> None:
+    """`engine/loop.py` writes the summary first, so this is a fault to show."""
     session_id = client.post("/sessions", json={"meeting_url": MEETING_URL}).json()[
         "session_id"
     ]
@@ -99,21 +100,22 @@ def test_get_summary_gives_the_stub_when_no_engine_wrote_one(
 
     result = client.get(f"/sessions/{session_id}/summary")
 
-    assert result.status_code == 200
-    assert result.json() == STUB_SUMMARY
+    assert result.status_code == 500
 
 
-def test_get_summary_gives_the_stored_summary(client: TestClient) -> None:
+def test_get_summary_gives_the_summary_of_the_engine(client: TestClient) -> None:
     session_id = client.post("/sessions", json={"meeting_url": MEETING_URL}).json()[
         "session_id"
     ]
-    session_store.set_summary(session_id, {"chief_complaint": "headache"})
+    summary = {field: f"the {field}" for field in prompts.SUMMARY_FIELDS}
+    session_store.set_summary(session_id, summary)
     session_store.set_status(session_id, "complete")
 
     result = client.get(f"/sessions/{session_id}/summary")
 
     assert result.status_code == 200
-    assert result.json() == {"chief_complaint": "headache"}
+    assert result.json() == summary
+    assert tuple(result.json()) == prompts.SUMMARY_FIELDS
 
 
 def test_a_failed_bot_gives_201_and_the_status_error(

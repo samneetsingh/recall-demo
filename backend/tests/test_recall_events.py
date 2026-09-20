@@ -218,3 +218,13 @@ def test_a_payload_with_no_data_block_gives_no_time() -> None:
     event = recall_events.verify_and_parse(body, signed_headers(body))
 
     assert event.event_at is None
+
+
+def test_the_event_carries_the_svix_message_id() -> None:
+    """Svix keeps this id the same for each retry, so it is the turn key."""
+    body = json.dumps({"event": "participant_events.chat_message"}).encode()
+    headers = signed_headers(body)
+
+    event = recall_events.verify_and_parse(body, headers)
+
+    assert event.message_id == headers["webhook-id"]

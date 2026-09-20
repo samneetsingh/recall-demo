@@ -10,7 +10,7 @@ flowchart LR
     R -->|bot joins| M[Google Meet call]
     M <-->|chat or transcript + audio| R
     R -->|webhooks / real-time events| B
-    B -->|prompts| E[Mock intake engine<br/>LiteLLM]
+    B -->|prompts| E[Mock intake engine<br/>openai SDK]
     B --> S[(SQLite)]
     F -->|poll status/summary| B
 ```
@@ -29,7 +29,7 @@ FastAPI app, Poetry-managed, running on a homelab server, exposed through a Clou
 Tunnel. Owns:
 - Session state (SQLite)
 - All calls to the Recall.ai API (create bot, send chat, send audio, read transcript)
-- The mock intake engine (LiteLLM)
+- The mock intake engine (the `openai` SDK)
 - Text-to-speech generation (OpenAI TTS) for voice mode
 
 ### Recall.ai
@@ -40,7 +40,7 @@ capturing chat and transcript, and playing bot audio into the meeting. See
 
 ### Mock intake engine
 
-A prompted LLM, called through LiteLLM. Not the real FIRY AI system. Takes the
+A prompted LLM, called through the `openai` SDK. Not the real FIRY AI system. Takes the
 conversation so far, returns the next question (or signals the interview is done), and
 at the end produces a structured summary. See `SPEC.md` for the summary field list.
 

@@ -73,9 +73,9 @@ def create_session(meeting_url: str, mode: Mode = "chat") -> Session:
         connection.execute(
             """
             INSERT INTO sessions (
-                id, meeting_url, mode, status, transcript, created_at, updated_at
+                id, meeting_url, mode, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, 'creating_bot', '[]', ?, ?)
+            VALUES (?, ?, ?, 'creating_bot', ?, ?)
             """,
             (session_id, meeting_url, mode, now, now),
         )
@@ -166,15 +166,59 @@ def set_summary(session_id: str, summary: dict[str, Any]) -> Session | None:
         return _fetch(connection, session_id)
 
 
-def append_turn(session_id: str, role: Role, text: str) -> Session | None:
-    """Add one turn to the end of the conversation log."""
+def append_turn(
+    session_id: str,
+    role: Role,
+    text: str,
+    event_id: str | None = None,
+) -> int | None:
+    """Add one turn. Give its id, or None if the turn did not go in.
+
+    The conversation is half-duplex, as docs/SPEC.md says for voice mode. A
+    turn goes in only if its role is not the role of the last turn, so the
+    log always alternates. A second patient message that arrives before the
+    assistant has answered the first is refused, and it is not queued.
+
+    Three rules, one statement, so two handlers that operate at the same
+    time cannot lose a turn or write past each other:
+
+    - the session must exist. SQLite does not apply a foreign key unless
+      `PRAGMA foreign_keys` is on;
+    - the role must change. `IS NOT` gives true for an empty log, so the
+      first turn is accepted;
+    - `event_id` must be new. It is the Svix message id, which stays the
+      same for each retry of one message.
+    """
     with connect() as connection:
-        session = _fetch(connection, session_id)
-        if session is None:
-            return None
-        log = [*session.transcript, {"role": role, "text": text}]
-        connection.execute(
-            "UPDATE sessions SET transcript = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(log), _now(), session_id),
+        cursor = connection.execute(
+            """
+            INSERT OR IGNORE INTO turns (
+                session_id, role, text, event_id, created_at
+            )
+            SELECT ?, ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ?)
+               AND ? IS NOT (
+                   SELECT role FROM turns WHERE session_id = ? ORDER BY id DESC LIMIT 1
+               )
+            """,
+            (session_id, role, text, event_id, _now(), session_id, role, session_id),
         )
-        return _fetch(connection, session_id)
+        # Read rowcount first. After an insert that the index refused,
+        # `lastrowid` is not the id of this turn.
+        if not cursor.rowcount:
+            return None
+        connection.execute(
+            "UPDATE sessions SET updated_at = ? WHERE id = ?",
+            (_now(), session_id),
+        )
+        return cursor.lastrowid
+
+
+def get_turns(session_id: str) -> list[dict[str, str]]:
+    """Give the conversation log, in order."""
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT role, text FROM turns WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+        return [{"role": row["role"], "text": row["text"]} for row in rows]

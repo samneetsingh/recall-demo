@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     # The SQLite file. Default is the path in the container
     DB_PATH: Path = Path("/app/data/recall_demo.sqlite3")
 
+    # The intake engine. The model answers with a strict JSON schema
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_TIMEOUT_SECONDS: float = 30.0
+
+    # The limit of questions in one intake. The engine applies it, not the model
+    INTAKE_MAX_TURNS: int = 6
+
     # Recall.ai. The host is specific to the region of the API key
     RECALL_API_BASE: str = "https://us-west-2.recall.ai"
     RECALL_BOT_NAME: str = "Headache Assistant"

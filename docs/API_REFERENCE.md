@@ -57,6 +57,15 @@ status. The frontend shows this text to the user. See `IMPLEMENTATION.md`.
 Get the structured summary once the session is complete. Returns 404 until `status`
 is `complete`.
 
+The eight fields are always present. A field that the intake did not cover holds the
+text `not discussed`: the intake asks a small number of questions, so this is usual and
+it is not a fault. A red-flag feature that the patient reported comes at the start of
+`associated_symptoms` after the text `RED FLAG:`.
+
+The result is HTTP 500 if a session is `complete` and has no summary. The engine writes
+the summary before it writes the status, so this is a fault of the backend and the route
+does not hide it with an empty object.
+
 Response:
 ```json
 {
@@ -99,6 +108,17 @@ The map from a bot event to `status`:
 A status that is `complete` does not change. An event name that the backend does not
 know gives HTTP 200 and makes no change. The `sub_code` is a plain string, not an enum:
 Recall adds values without a notice.
+
+**A repeated event does not change the result.** Svix delivers at least one time. A
+chat message carries the Svix message id into the `turns` table, where
+`UNIQUE(session_id, event_id)` refuses the second copy. The patient thus gets one
+question for one message, and a retry adds no turn.
+
+**The conversation is half-duplex.** One full patient message goes in, the assistant
+answers it, and only then does the next message go in. A message that arrives before
+the answer is refused and it is not queued, so a patient who sends an answer in two
+parts loses the second part. This is the rule that `SPEC.md` gives for voice mode, with
+the chat message as the unit in place of a pause.
 
 **The order of the events does not change the result.** Webhook delivery is at-least-once
 and has no order, and Recall was seen to send `bot.in_waiting_room` before

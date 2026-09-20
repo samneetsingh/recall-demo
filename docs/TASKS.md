@@ -22,8 +22,9 @@ works end to end.
       `backend/.env` is not on the homelab server yet. Owner: Sam.
 - [x] Endpoint: create session (takes a meeting URL, creates a Recall bot).
 - [x] Endpoint: get session status.
-- [~] Endpoint: get session summary. The route and the 404 rule operate. The
-      summary is stub data until the engine of section 3 writes a real one.
+- [x] Endpoint: get session summary. The route, the 404 rule and a real summary
+      from the engine. `STUB_SUMMARY` is gone. A session that is `complete` with
+      no summary gives HTTP 500, which is a fault that the route does not hide.
 - [x] Webhook endpoint(s) for Recall bot status events, verified against Recall's
       signature. `POST /webhooks/recall` verifies with the workspace secret, then maps
       the bot events to the session status. See `task-02-recall-connection/todo.md`.
@@ -31,18 +32,40 @@ works end to end.
 
 ## 3. Mock intake engine
 
-- [ ] LiteLLM wired up.
-- [ ] Intake prompt written: question sequence, branching behavior.
-- [ ] Summary prompt written: structured fields listed in SPEC.md.
-- [ ] Engine tested standalone (no Recall involved yet) with a scripted conversation.
+- [x] LLM wired up. The `openai` SDK, not LiteLLM: the workspace has one provider,
+      so the SDK is one package and not a large tree. `app/engine/llm.py` is the
+      only module that imports it. See `task-03-intake-engine/todo.md`.
+- [x] Intake prompt written: an action envelope, a branch on the last answer, and
+      the turn limit `INTAKE_MAX_TURNS` (6). The engine applies the limit, not the
+      model.
+- [x] Summary prompt written: a second call with its own prompt, the eight fields
+      of SPEC.md, and a red-flag rule.
+- [x] Engine tested standalone (no Recall involved yet) with a scripted
+      conversation. `tests/test_engine_loop.py`. No network in any test.
 
 ## 4. Mode boundary (build before chat mode)
 
-- [ ] `handle_incoming_turn` / `send_outgoing_turn` defined as the interface
+- [x] `handle_incoming_turn` / `send_outgoing_turn` defined as the interface
       between the state machine and the meeting platform. See
-      `IMPLEMENTATION.md`.
-- [ ] State machine, conversation log, `engine/intake.py`, `engine/summary.py`
+      `IMPLEMENTATION.md`. The protocol is `app/modes/base.py`, and the registry
+      is empty until section 5.
+- [x] State machine, conversation log, `engine/intake.py`, `engine/summary.py`
       written only in terms of this interface, no chat-specific code above it.
+      A test reads the engine modules and refuses the words chat and voice.
+
+## 4a. The turns table (before chat mode)
+
+- [x] The conversation log moved from the `sessions.transcript` JSON column to its own
+      `turns` table. An `INSERT` cannot lose a turn, which a read and then a write can.
+      Migrations 3, 4 and 5: make the table, copy the JSON into rows, drop the column.
+- [x] A turn is one message from each party. `turn_count(log)` is `len(log) // 2`.
+- [x] `UNIQUE(session_id, event_id)` with `INSERT OR IGNORE` makes a repeated delivery
+      change nothing. `RecallEvent.message_id` carries the Svix message id.
+- [x] The conversation is half-duplex. The insert refuses a turn whose role is the role
+      of the last turn, so one full patient message goes in, the assistant answers it,
+      and only then does the next message go in. The log always alternates.
+- [x] `engine/intake.py` and `engine/summary.py` did not change. See
+      `task-04-turns-table/todo.md`.
 
 ## 5. Chat mode (must work)
 
@@ -76,6 +99,29 @@ works end to end.
 - [ ] Backend deployed on the homelab server, tunnel live.
 - [ ] Frontend deployed to Workers.
 - [ ] Full flow tested against the live URLs, not localhost.
+
+## 8a. Prompt tuning (an optimization, near the end)
+
+Do this after the loop works end to end, not before. The prompts operate and they are
+not tuned. `backend/app/engine/prompts.py` holds all of the text, so this task changes
+one file.
+
+- [ ] Make a small evaluation: more than one scripted patient, the same prompts, and a
+      look at each summary. Sam has a synthetic suite from an earlier project that ran
+      the same intake against other models. Use its shape.
+- [ ] The model sometimes gives the action `complete` with one question left, although
+      rule 9 says to use each question. The engine guarantees a maximum of 6 turns and
+      not a minimum.
+- [ ] The red-flag rule is sensitive. Session 07 saw both faults in one session: the
+      model invented "the worst headache of my life" from "really bad headaches", and
+      then, after the first repair, it reported no red flag for a patient who gave
+      three. Each change to rule 5 needs both a patient with a red flag and a patient
+      with none.
+- [ ] A question must be 500 characters or less. Google Meet refuses a longer chat
+      message. Nothing applies this limit today.
+- [ ] Try a larger model against the same patients, and compare. `OPENAI_MODEL` is a
+      setting, so this needs no code change.
+- [ ] Tune `INTAKE_MAX_TURNS`. It is 6 for a short demonstration.
 
 ## 9. Docs pass
 

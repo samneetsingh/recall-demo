@@ -1,5 +1,7 @@
 """The tests of the read and write helpers."""
 
+import threading
+
 from app.db import session_store
 
 MEETING_URL = "https://meet.google.com/abc-defg-hij"
@@ -11,7 +13,7 @@ def test_create_session_has_the_default_values() -> None:
     assert session.meeting_url == MEETING_URL
     assert session.mode == "chat"
     assert session.status == "creating_bot"
-    assert session.transcript == []
+    assert session_store.get_turns(session.id) == []
     assert session.summary is None
     assert session.bot_id is None
     assert session.created_at == session.updated_at
@@ -68,11 +70,12 @@ def test_set_summary_writes_the_fields() -> None:
 def test_append_turn_keeps_the_sequence() -> None:
     session = session_store.create_session(MEETING_URL)
 
-    session_store.append_turn(session.id, "bot", "What is the problem?")
-    changed = session_store.append_turn(session.id, "patient", "I have a headache.")
+    first = session_store.append_turn(session.id, "bot", "What is the problem?")
+    second = session_store.append_turn(session.id, "patient", "I have a headache.")
 
-    assert changed is not None
-    assert changed.transcript == [
+    assert first is not None and second is not None
+    assert second > first
+    assert session_store.get_turns(session.id) == [
         {"role": "bot", "text": "What is the problem?"},
         {"role": "patient", "text": "I have a headache."},
     ]
@@ -111,3 +114,116 @@ def test_a_new_session_has_no_bot_id() -> None:
     session = session_store.create_session(MEETING_URL)
 
     assert session.bot_id is None
+
+
+def test_a_repeated_event_makes_one_turn() -> None:
+    """Svix delivers at least one time, so a repeat is normal."""
+    session = session_store.create_session(MEETING_URL)
+
+    first = session_store.append_turn(session.id, "patient", "hello", "msg_1")
+    again = session_store.append_turn(session.id, "patient", "hello", "msg_1")
+
+    assert first is not None
+    assert again is None
+    assert session_store.get_turns(session.id) == [{"role": "patient", "text": "hello"}]
+
+
+def test_two_events_make_two_turns() -> None:
+    session = session_store.create_session(MEETING_URL)
+
+    session_store.append_turn(session.id, "patient", "one", "msg_1")
+    session_store.append_turn(session.id, "bot", "a question")
+    session_store.append_turn(session.id, "patient", "two", "msg_2")
+
+    assert len(session_store.get_turns(session.id)) == 3
+
+
+def test_the_same_event_id_in_another_session_is_not_a_repeat() -> None:
+    one = session_store.create_session(MEETING_URL)
+    two = session_store.create_session(MEETING_URL)
+
+    assert session_store.append_turn(one.id, "patient", "hello", "msg_1") is not None
+    assert session_store.append_turn(two.id, "patient", "hello", "msg_1") is not None
+
+
+def test_many_bot_turns_have_no_event_id() -> None:
+    """SQLite makes each NULL different, so the unique index permits them."""
+    session = session_store.create_session(MEETING_URL)
+
+    session_store.append_turn(session.id, "bot", "one")
+    session_store.append_turn(session.id, "patient", "a", "msg_a")
+    session_store.append_turn(session.id, "bot", "two")
+    session_store.append_turn(session.id, "patient", "b", "msg_b")
+    session_store.append_turn(session.id, "bot", "three")
+
+    assert len(session_store.get_turns(session.id)) == 5
+
+
+def test_the_log_always_alternates() -> None:
+    """Half-duplex. The assistant answers before it takes the next message."""
+    session = session_store.create_session(MEETING_URL)
+
+    assert session_store.append_turn(session.id, "bot", "what brings you in?")
+    assert session_store.append_turn(session.id, "patient", "headaches", "msg_1")
+    # The patient sends a second message before the assistant answered.
+    assert session_store.append_turn(session.id, "patient", "for weeks", "msg_2") is None
+    assert session_store.append_turn(session.id, "bot", "how long?")
+    assert session_store.append_turn(session.id, "patient", "three weeks", "msg_3")
+
+    assert session_store.get_turns(session.id) == [
+        {"role": "bot", "text": "what brings you in?"},
+        {"role": "patient", "text": "headaches"},
+        {"role": "bot", "text": "how long?"},
+        {"role": "patient", "text": "three weeks"},
+    ]
+
+
+def test_two_assistant_turns_in_a_row_are_refused() -> None:
+    session = session_store.create_session(MEETING_URL)
+
+    assert session_store.append_turn(session.id, "bot", "one question")
+    assert session_store.append_turn(session.id, "bot", "another question") is None
+
+
+def test_a_turn_of_another_session_is_not_in_the_log() -> None:
+    one = session_store.create_session(MEETING_URL)
+    two = session_store.create_session(MEETING_URL)
+    session_store.append_turn(two.id, "bot", "not mine")
+
+    assert session_store.get_turns(one.id) == []
+
+
+def test_two_appends_at_the_same_time_give_one_turn_and_no_loss() -> None:
+    """The fault of task 3 was that a read and then a write lost a turn.
+
+    With the alternation rule, two patient messages at the same time give one
+    turn and one refusal. Neither is decided by which thread was faster to
+    read, which is what the fault was.
+    """
+    session = session_store.create_session(MEETING_URL)
+    start = threading.Barrier(2)
+    ids: list[int | None] = []
+    lock = threading.Lock()
+
+    def append(text: str) -> None:
+        start.wait(timeout=5)
+        turn_id = session_store.append_turn(session.id, "patient", text)
+        with lock:
+            ids.append(turn_id)
+
+    threads = [
+        threading.Thread(target=append, args=("one",)),
+        threading.Thread(target=append, args=("two",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    # Exactly one goes in. The other is the second patient message of a
+    # half-duplex conversation, and the store refuses it.
+    assert sorted(ids, key=lambda value: value is None) [0] is not None
+    assert ids.count(None) == 1
+    log = session_store.get_turns(session.id)
+    assert len(log) == 1
+    assert log[0]["text"] in {"one", "two"}

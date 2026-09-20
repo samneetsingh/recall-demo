@@ -29,12 +29,15 @@ class RecallEvent:
     value that this code does not know must not stop the application.
     `payload` holds the full object for the chat loop and the voice loop.
     `event_at` is the time of the event at Recall, in one format, or None.
+    `message_id` is the Svix message id, which stays the same for each retry of
+    one message. It is the `event_id` of a turn.
     """
 
     name: str
     bot_id: str | None
     sub_code: str | None
     event_at: str | None
+    message_id: str | None
     payload: dict[str, Any]
 
 
@@ -100,5 +103,6 @@ def verify_and_parse(raw_body: bytes, headers: Mapping[str, str]) -> RecallEvent
         bot_id=str(bot_id) if bot_id else None,
         sub_code=str(sub_code) if sub_code else None,
         event_at=_event_time(_dig(payload, "data", "data", "updated_at")),
+        message_id=headers.get("webhook-id"),
         payload=payload,
     )
