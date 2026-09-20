@@ -67,9 +67,22 @@ def test_get_session_gives_the_status(client: TestClient) -> None:
     assert result.json() == {
         "session_id": session_id,
         "status": "waiting_for_bot",
+        "mode": "chat",
         "summary": None,
         "error_reason": None,
     }
+
+
+def test_get_session_gives_the_mode_of_a_voice_session(client: TestClient) -> None:
+    """The page reads this. The instruction it shows is not the same for the two."""
+    session_id = client.post(
+        "/sessions", json={"meeting_url": MEETING_URL, "mode": "voice"}
+    ).json()["session_id"]
+
+    result = client.get(f"/sessions/{session_id}")
+
+    assert result.status_code == 200
+    assert result.json()["mode"] == "voice"
 
 
 def test_get_session_gives_404_for_an_unknown_id(client: TestClient) -> None:

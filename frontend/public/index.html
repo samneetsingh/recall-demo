@@ -71,7 +71,7 @@
   a { color: inherit; }
 
   label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
-  input[type="url"] {
+  input[type="url"], select {
     width: 100%;
     padding: 10px 12px;
     border: 1px solid var(--line);
@@ -80,7 +80,9 @@
     color: var(--fg);
     font: inherit;
   }
-  input[type="url"]:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+  input[type="url"]:focus-visible,
+  select:focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+  .field + .field { margin-top: 14px; }
   button {
     margin-top: 12px;
     padding: 10px 16px;
@@ -146,15 +148,21 @@
   <section class="card" id="form-card">
     <h2>Start an intake</h2>
     <form id="start-form" novalidate>
-      <label for="meeting-url">Google Meet URL</label>
-      <input id="meeting-url" type="url" required autocomplete="off" spellcheck="false"
-             placeholder="https://meet.google.com/abc-defg-hij">
+      <div class="field">
+        <label for="meeting-url">Google Meet URL</label>
+        <input id="meeting-url" type="url" required autocomplete="off" spellcheck="false"
+               placeholder="https://meet.google.com/abc-defg-hij">
+      </div>
+      <div class="field">
+        <label for="mode">How the bot asks</label>
+        <select id="mode">
+          <option value="chat" selected>Chat — the bot types in the meeting chat</option>
+          <option value="voice">Voice — the bot speaks, and listens for your answer</option>
+        </select>
+      </div>
       <button id="start-button" type="submit">Send the bot</button>
     </form>
-    <p class="note">
-      The bot joins the call and asks its questions in the meeting chat. Keep this page
-      open: the summary comes here.
-    </p>
+    <p class="note" id="mode-note"></p>
     <p class="alert" id="form-error" hidden></p>
   </section>
 
@@ -193,9 +201,17 @@
   const API = "https://recall-api.ss-ubuntu-01.net";
   const POLL_MS = 2500;
 
-  // Voice mode is section 6 of docs/TASKS.md and it has no implementation. A session
-  // with the mode `voice` goes to `error`, so the mode is a constant and not a control.
-  const MODE = "chat";
+  // What the patient must do to answer. It is the one text that is not the same
+  // for the two modes, so it is the one reason the page reads `mode` at all.
+  const MODE_NOTE = {
+    chat: "The bot joins the call and types its questions in the meeting chat. Keep this page open: the summary comes here.",
+    voice: "The bot joins the call and speaks its questions out loud. Keep this page open: the summary comes here.",
+  };
+
+  const IN_PROGRESS_DETAIL = {
+    chat: "Answer the questions of the bot in the meeting chat. The summary comes to this page at the end.",
+    voice: "Answer the bot out loud. Wait until it stops speaking, then speak, then stop. The summary comes to this page at the end.",
+  };
 
   // The order and the labels are from docs/SPEC.md.
   const FIELDS = [
@@ -219,8 +235,8 @@
       detail: "The bot waits at the door. Let it in to start the intake.",
     },
     in_progress: {
+      // The detail is in IN_PROGRESS_DETAIL: it is the one that needs the mode.
       headline: "The intake is in operation.",
-      detail: "Answer the questions of the bot in the meeting chat. The summary comes to this page at the end.",
     },
     complete: {
       headline: "The intake is complete.",
@@ -236,6 +252,13 @@
   const form = el("start-form");
   const input = el("meeting-url");
   const button = el("start-button");
+  const modeSelect = el("mode");
+
+  const showModeNote = () => {
+    el("mode-note").textContent = MODE_NOTE[modeSelect.value] || MODE_NOTE.chat;
+  };
+  modeSelect.addEventListener("change", showModeNote);
+  showModeNote();
 
   let sessionId = null;
   let pollTimer = null;
@@ -260,7 +283,7 @@
       const answer = await fetch(API + "/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ meeting_url: url, mode: MODE }),
+        body: JSON.stringify({ meeting_url: url, mode: modeSelect.value }),
       });
       const text = await answer.text();
       if (answer.status !== 201) {
@@ -366,8 +389,14 @@
     // A status that this page does not know shows the word as it is. The backend can
     // add one, and an unknown word is better than an empty page.
     const state = STATES[body.status] || { headline: body.status, detail: "" };
+    // `body.mode` and not the control: a reload keeps the session id only, and
+    // the backend owns the mode. One source of truth cannot disagree with itself.
+    const detail =
+      body.status === "in_progress"
+        ? IN_PROGRESS_DETAIL[body.mode] || IN_PROGRESS_DETAIL.chat
+        : state.detail;
     el("status-headline").textContent = state.headline;
-    el("status-detail").textContent = state.detail;
+    el("status-detail").textContent = detail;
     el("dot").className = "dot" + (body.status === "complete" ? " ok" : body.status === "error" ? " bad" : "");
     renderMeta();
 

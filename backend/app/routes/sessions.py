@@ -39,10 +39,16 @@ class SessionResponse(BaseModel):
 
     The frontend polls this route. It reads `status`, and it shows
     `error_reason` to the user when the status is `error`.
+
+    `mode` is here because the instruction on the page is not the same for the
+    two modes: a chat patient answers in the meeting chat and a voice patient
+    answers out loud. A reload keeps the session id only, so the page cannot
+    hold the mode itself without making a second source of truth for it.
     """
 
     session_id: str
     status: str
+    mode: Mode
     summary: dict[str, Any] | None = None
     error_reason: str | None = None
 
@@ -86,6 +92,7 @@ def get_session(session_id: str) -> SessionResponse:
     return SessionResponse(
         session_id=session.id,
         status=session.status,
+        mode=session.mode,
         summary=session.summary,
         error_reason=session.error_reason,
     )
