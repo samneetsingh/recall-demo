@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recall Demo — AI Pre-Visit Intake Assistant</title>
+<meta name="description" content="A demo of the Recall.ai Meeting Bot API. A bot joins a video call and does a patient intake interview.">
+<style>
+  :root {
+    --bg: #fbfbfa;
+    --fg: #1b1b19;
+    --muted: #6b6b66;
+    --line: #e3e3df;
+    --ok: #1f7a46;
+    --bad: #b03030;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17171a;
+      --fg: #ececea;
+      --muted: #9a9a94;
+      --line: #2e2e33;
+      --ok: #5fc98b;
+      --bad: #e58080;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 48px 16px;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    justify-content: center;
+  }
+  main { width: 100%; max-width: 40rem; }
+  h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 32px; }
+  p { margin: 0 0 16px; }
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 20px;
+    margin: 32px 0;
+  }
+  .card h2 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 12px;
+    font-weight: 600;
+  }
+  .row { display: flex; gap: 10px; align-items: baseline; }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--muted); flex: none; transform: translateY(-1px);
+  }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85em;
+    color: var(--muted);
+  }
+  footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--line); padding-top: 16px; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Recall Demo</h1>
+  <p class="sub">AI Pre-Visit Intake Assistant</p>
+
+  <p>
+    A bot joins a video call and interviews a patient. The interview is like
+    the pre-visit questionnaire of a headache clinic. The bot gives a structured clinical
+    summary at the end of the call.
+  </p>
+  <p>
+    This page is a placeholder. The user interface will be built in a future task.
+  </p>
+
+  <section class="card">
+    <h2>Backend connection</h2>
+    <div class="row">
+      <span class="dot" id="dot"></span>
+      <span id="status">The check is in operation&hellip;</span>
+    </div>
+  </section>
+
+  <footer>
+    Built on the Recall.ai Meeting Bot API.
+  </footer>
+</main>
+
+<script>
+  // Infrastructure check only. It proves that a browser request from this origin to the
+  // backend passes CORS. Task 7 replaces this section with the real user interface.
+  const API = "https://recall-api.ss-ubuntu-01.net";
+  const dot = document.getElementById("dot");
+  const status = document.getElementById("status");
+
+  fetch(API + "/health", { method: "GET" })
+    .then((r) => r.json().then((body) => ({ ok: r.ok, code: r.status, body })))
+    .then(({ ok, code, body }) => {
+      if (!ok) throw new Error("HTTP " + code);
+      dot.className = "dot ok";
+      status.innerHTML = 'The backend answers. <code>/health</code> gives <code>' +
+        JSON.stringify(body) + "</code>";
+    })
+    .catch((err) => {
+      dot.className = "dot bad";
+      status.innerHTML = "The backend does not answer. <code>" + String(err) + "</code>";
+    });
+</script>
+</body>
+</html>

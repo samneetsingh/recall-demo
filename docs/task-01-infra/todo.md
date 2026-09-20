@@ -119,8 +119,8 @@ frontend/
     index.html              The placeholder page
 ```
 
-- [ ] Make `package.json`. Add `wrangler` as a development dependency.
-- [ ] Write `wrangler.jsonc` with this content:
+- [x] Make `package.json`. Add `wrangler` as a development dependency.
+- [x] Write `wrangler.jsonc` with this content:
 
 ```jsonc
 {
@@ -138,17 +138,17 @@ frontend/
 }
 ```
 
-- [ ] Write `public/index.html`. Show the name of the demo on the page.
-- [ ] Run `wrangler whoami`. The account must own the zone `samneet.com`.
-- [ ] Keep the wildcard record `*.samneet.com`. Other subdomains of the zone use it.
+- [x] Write `public/index.html`. Show the name of the demo on the page.
+- [x] Run `wrangler whoami`. The account must own the zone `samneet.com`.
+- [x] Keep the wildcard record `*.samneet.com`. Other subdomains of the zone use it.
       The custom domain makes a more specific record, which has precedence.
-- [ ] Make sure no CNAME record is on the hostname `recall.samneet.com`. A CNAME record
+- [x] Make sure no CNAME record is on the hostname `recall.samneet.com`. A CNAME record
       on the exact hostname prevents the custom domain.
-- [ ] Make sure no Worker route has the pattern `*.samneet.com/*`. A route has
+- [x] Make sure no Worker route has the pattern `*.samneet.com/*`. A route has
       precedence over a custom domain.
-- [ ] Run `npx wrangler deploy --dry-run`. The configuration must be correct.
-- [ ] Run `npx wrangler deploy`.
-- [ ] Check `https://recall.samneet.com/` from outside the network. The result must be
+- [x] Run `npx wrangler deploy --dry-run`. The configuration must be correct.
+- [x] Run `npx wrangler deploy`.
+- [x] Check `https://recall.samneet.com/` from outside the network. The result must be
       HTTP 200.
 
 ## CORS procedure — 1d
@@ -163,12 +163,12 @@ frontend/
 
 - [x] `https://recall-api.ss-ubuntu-01.net/health` gives HTTP 200 from outside the
       network.
-- [ ] `https://recall.samneet.com/` gives HTTP 200 from outside the network.
-- [ ] A browser request from the frontend to the backend is successful. The CORS
+- [x] `https://recall.samneet.com/` gives HTTP 200 from outside the network.
+- [x] A browser request from the frontend to the backend is successful. The CORS
       headers are in the response.
-- [ ] Each configuration file is in the repository.
-- [ ] Section 1 of `../TASKS.md` shows items 1b, 1c and 1d as complete.
-- [ ] The session log is complete.
+- [x] Each configuration file is in the repository.
+- [x] Section 1 of `../TASKS.md` shows items 1b, 1c and 1d as complete.
+- [x] The session log is complete. See [`../session-logs/03-frontend-worker.md`](../session-logs/03-frontend-worker.md).
 
 ## Out of scope
 

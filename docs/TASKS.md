@@ -7,7 +7,7 @@ works end to end.
 
 - [x] Cloudflare Tunnel running on the homelab server.
 - [x] `recall-api.ss-ubuntu-01.net` resolves and hits a placeholder FastAPI route.
-- [ ] `recall.samneet.com` resolves via Cloudflare Workers, serves a placeholder page.
+- [x] `recall.samneet.com` resolves via Cloudflare Workers, serves a placeholder page.
 - [x] CORS configured on the backend for the frontend origin.
 
 ## 2. Backend skeleton

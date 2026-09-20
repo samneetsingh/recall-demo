@@ -1,0 +1,14 @@
+{
+  "name": "recall-demo-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static placeholder site for the recall-demo frontend. Deploys to Cloudflare Workers.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "check": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.135.0"
+  }
+}

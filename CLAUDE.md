@@ -76,6 +76,7 @@ different places and can fail independently.
 - SQLite is fine for this demo. No migrations framework needed, keep the schema small.
 - No HIPAA-related controls in this build. Note it as a next step in the README, not something to implement now.
 - When creating any documentation or communicating with the user, utilize ASD-STE100 conventions.
+- If a question arises, ask it. Do not attempt to reason through a question that can most likely be answered by the user.
 
 ## What "done" looks like
 
