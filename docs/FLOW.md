@@ -251,7 +251,8 @@ irreversible, and a failure is a log line only, because the summary is already w
 The leave is **not** on the mode boundary: it is one HTTP call to Recall and it is the
 same for chat and for voice. A session in `error` keeps its bot, because an error
 usually means that the bot takes no command. The event that the leave makes,
-`bot.call_ended`, changes nothing: `apply_bot_event` has `AND status != 'complete'`.
+`bot.call_ended`, changes nothing: `apply_bot_event` has
+`AND status NOT IN ('complete', 'error')`.
 
 ## 7. The status machine
 
@@ -263,13 +264,15 @@ stateDiagram-v2
     waiting_for_bot --> in_progress: bot.in_call_recording
     waiting_for_bot --> error: bot.fatal, permission denied
     in_progress --> complete: the complete signal, summary written
-    in_progress --> error: LLMError, ModeError, bot.call_ended
+    in_progress --> complete: bot.call_ended, a normal sub-code
+    in_progress --> error: LLMError, ModeError
+    in_progress --> error: bot.call_ended, a fault, an unknown, or an absent sub-code
     complete --> [*]
     error --> [*]
 ```
 
-`complete` is terminal in the SQL itself: `apply_bot_event` has `AND status != 'complete'`
-in the same statement as the write.
+`complete` and `error` are both terminal in the SQL itself: `apply_bot_event` has
+`AND status NOT IN ('complete', 'error')` in the same statement as the write.
 
 ## 8. What the frontend reads
 
@@ -299,8 +302,8 @@ home server behind a tunnel, so the page shows a warning, keeps the last known s
 and sends the next request at the usual time.
 
 **The mode is a constant in the page.** It is `chat`. Voice mode is section 6 of
-`TASKS.md` and it has no implementation, so a session with the mode `voice` goes to
-`error`. There is no control for it, and the page has nothing else that is
+`TASKS.md` and it has no implementation, so `POST /sessions` refuses the mode `voice`
+with HTTP 400. There is no control for it, and the page has nothing else that is
 mode-specific.
 
 **What the page does not read.** There is no route for the `turns` table, so the page
@@ -324,8 +327,9 @@ that a fault of its own, and the page does not hide a fault of the backend.
 
 - Voice mode: `tts/openai_tts.py`, the transcript parser, and the silence-gap timer.
   `transcript.data` arrives at the webhook route and gets a log line only.
-- `MODES` has `chat` and not `voice`. A session with the mode `voice` goes to `error`
-  with the reason `the mode voice has no implementation`.
+- `MODES` has `chat` and not `voice`. A session with the mode `voice` gives HTTP 400
+  with the detail `the mode voice has no implementation`. The test runs before
+  `session_store.create_session` and before the bot, so no session row is made.
 
 **Repaired by task 4. Kept here so the reason is not lost.**
 
@@ -370,4 +374,9 @@ that a fault of its own, and the page does not hide a fault of the backend.
    of session 05, and the webhook applied it to the session of session 05, which was
    `error`. The log line `session <id> is error, no turn` is what this looks like.
 
-All six are next steps for the README, not faults of the store.
+7. **A call that ends early gives `complete` with no summary.** `bot.call_ended` with
+   a normal sub-code writes `complete`, and the intake wrote no summary, so
+   `GET /sessions/{id}/summary` gives HTTP 500 for that session. `engine/summary.py`
+   is the fix: it makes a summary from the part of the log that is complete.
+
+All seven are next steps for the README, not faults of the store.

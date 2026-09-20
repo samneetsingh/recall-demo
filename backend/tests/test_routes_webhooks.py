@@ -2,6 +2,7 @@
 
 import itertools
 import json
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,9 +10,11 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.db import session_store
 from app.engine import intake, prompts, summary as summary_engine
+from app.engine.llm import LLMError
 from app.modes.base import CLOSING_MESSAGE, CONSENT_NOTICE
 from app.recall import client as recall_client
 from app.recall.client import RecallError
+from app.routes import webhooks
 from tests.conftest import chat_payload, signed_headers
 
 BOT_ID = "bot-abc"
@@ -56,11 +59,8 @@ def offline(
 ) -> None:
     """No test in this file calls OpenAI or Recall.
 
-    The route starts the intake now, so a test that makes a session
-    `in_progress` reaches the model and the chat send. Both are fakes here.
-    Section 5a added a third caller, `leave_call`, which is a fake for the same
-    reason: a route that gains a caller takes a test file back on to the
-    network.
+    A test that makes a session `in_progress` reaches the model, the chat send
+    and the leave through the route, so all three are fakes here.
     """
     asked = {"count": 0}
 
@@ -226,17 +226,73 @@ def test_an_unknown_sub_code_goes_in_the_column(
     assert session.error_reason == "a_sub_code_from_next_year"
 
 
-def test_call_ended_before_the_intake_gives_error_with_a_prefix(
+# The `bot.call_ended` sub-codes that docs/API_CONTRACT.md names as normal. The
+# list is here, and not read from the route, so that a value that leaves the
+# route fails this test.
+NORMAL_CALL_ENDED_SUB_CODES = [
+    "bot_received_leave_call",
+    "call_ended_by_host",
+    "bot_kicked_from_call",
+    "timeout_exceeded_everyone_left",
+    "timeout_exceeded_noone_joined",
+    "call_ended_by_platform_waiting_room_timeout",
+    "timeout_exceeded_silence_detected",
+]
+
+
+@pytest.mark.parametrize("sub_code", NORMAL_CALL_ENDED_SUB_CODES)
+def test_a_call_that_ended_in_a_normal_manner_is_not_an_error(
+    client: TestClient, session_id: str, sub_code: str
+) -> None:
+    """A normal end is not a failure, and the poll of the frontend must stop."""
+    session_store.set_status(session_id, "in_progress")
+
+    _post(client, _bot_event("bot.call_ended", sub_code))
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "complete"
+    assert session.error_reason is None
+
+
+def test_a_call_that_ended_in_a_fault_gives_error_with_a_prefix(
     client: TestClient, session_id: str
 ) -> None:
     session_store.set_status(session_id, "in_progress")
 
-    _post(client, _bot_event("bot.call_ended", "call_ended_by_host"))
+    _post(client, _bot_event("bot.call_ended", "meeting_link_invalid"))
 
     session = session_store.get_session(session_id)
     assert session is not None
     assert session.status == "error"
-    assert session.error_reason == "call_ended:call_ended_by_host"
+    assert session.error_reason == "call_ended:meeting_link_invalid"
+
+
+def test_an_unknown_call_ended_sub_code_gives_error_and_keeps_the_value(
+    client: TestClient, session_id: str
+) -> None:
+    """Recall adds sub-codes. A value this code does not know must be visible."""
+    session_store.set_status(session_id, "in_progress")
+
+    _post(client, _bot_event("bot.call_ended", "a_sub_code_from_next_year"))
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "error"
+    assert session.error_reason == "call_ended:a_sub_code_from_next_year"
+
+
+def test_call_ended_with_no_sub_code_gives_error(
+    client: TestClient, session_id: str
+) -> None:
+    session_store.set_status(session_id, "in_progress")
+
+    _post(client, _bot_event("bot.call_ended"))
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "error"
+    assert session.error_reason == "call_ended:unknown"
 
 
 def test_call_ended_after_complete_makes_no_change(
@@ -303,7 +359,7 @@ def test_an_unknown_bot_id_gives_200(client: TestClient, session_id: str) -> Non
 def test_a_realtime_event_gives_200_and_no_status_change(
     client: TestClient, session_id: str, name: str
 ) -> None:
-    """The chat loop and the voice loop are later tasks."""
+    """A real-time event carries no bot status, and this one carries no text."""
     result = _post(client, {"event": name, "data": {"bot": {"id": BOT_ID}}})
 
     assert result.status_code == 200
@@ -312,9 +368,9 @@ def test_a_realtime_event_gives_200_and_no_status_change(
     assert session.status == "waiting_for_bot"
 
 
-# The four events of the live test of session 05, with the times that Recall
-# gave them. Recall sent them out of order: `bot.in_waiting_room` went out
-# before `bot.joining_call`. See ../../docs/task-02-event-ordering/todo.md.
+# The four events of a live call, with the times that Recall gave them. Recall
+# sent them out of order: `bot.in_waiting_room` went out before
+# `bot.joining_call`.
 LIVE_EVENTS = [
     ("bot.joining_call", "2026-09-20T05:47:04.508000Z"),
     ("bot.in_waiting_room", "2026-09-20T05:47:04.524000Z"),
@@ -357,7 +413,7 @@ def test_every_order_of_the_live_events_ends_in_progress(
 def test_a_late_event_does_not_put_back_an_old_status(
     client: TestClient, session_id: str
 ) -> None:
-    """The failure this task prevents: the bot is recording, the session is not."""
+    """The failure to prevent: the bot is recording, and the session is not."""
     _post(client, _timed_event("bot.in_call_recording", LIVE_EVENTS[3][1], BOT_ID))
     _post(client, _timed_event("bot.in_call_not_recording", LIVE_EVENTS[2][1], BOT_ID))
 
@@ -428,7 +484,7 @@ def test_the_event_time_is_stored_in_one_format(
     assert session.last_event_at == "2026-09-20T05:47:04.556000+00:00"
 
 
-# --- The chat wire: section 5 -------------------------------------------
+# --- The chat wire ------------------------------------------------------
 
 
 def test_the_bot_in_the_call_sends_the_notice_and_then_the_first_question(
@@ -591,10 +647,10 @@ def test_a_failed_closing_line_keeps_the_session_complete(
     assert session.summary == SUMMARY_ANSWER
 
 
-def test_a_session_in_voice_mode_gives_an_error_and_no_turn(
-    client: TestClient, sent: list[str]
+def test_a_session_in_a_mode_with_no_implementation_errors_and_leaves(
+    client: TestClient, sent: list[str], left: list[str]
 ) -> None:
-    """Voice mode has no implementation until section 6."""
+    """`POST /sessions` refuses such a mode, so only a row like this reaches here."""
     session = session_store.create_session(MEETING_URL, "voice")
     session_store.set_bot_id(session.id, "bot-voice")
     session_store.set_status(session.id, "in_progress")
@@ -606,6 +662,7 @@ def test_a_session_in_voice_mode_gives_an_error_and_no_turn(
     assert after.status == "error"
     assert "no implementation" in (after.error_reason or "")
     assert sent == []
+    assert left == ["bot-voice"]
 
 
 def test_a_message_after_the_intake_sends_no_second_closing_line(
@@ -760,10 +817,33 @@ def test_a_failed_leave_keeps_the_session_complete(
     assert session.summary == SUMMARY_ANSWER
 
 
-def test_a_session_that_goes_to_error_keeps_its_bot(
+def test_a_failed_model_call_takes_the_bot_out_of_the_call(
+    client: TestClient,
+    session_id: str,
+    sent: list[str],
+    left: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The usual error: the model fails and the bot is in good health."""
+
+    def fail(system, messages, schema, schema_name):
+        raise LLMError("the model gave no answer")
+
+    monkeypatch.setattr(intake, "ask_model", fail)
+
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "error"
+    assert sent == [CONSENT_NOTICE, webhooks.STOPPED_MESSAGE]
+    assert left == [BOT_ID]
+
+
+def test_a_failed_send_takes_the_bot_out_of_the_call(
     client: TestClient, session_id: str, left: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Sam selected this: an error usually means that the bot takes no command."""
+    """The meeting refuses each message, so no line goes out. The leave still does."""
 
     def refuse(bot_id: str, text: str, pin: bool = False) -> None:
         raise RecallError("recall http 400: the bot is not in a call")
@@ -775,15 +855,69 @@ def test_a_session_that_goes_to_error_keeps_its_bot(
     session = session_store.get_session(session_id)
     assert session is not None
     assert session.status == "error"
-    assert left == []
+    assert left == [BOT_ID]
+
+
+def test_a_message_after_a_failure_does_not_leave_a_second_time(
+    client: TestClient,
+    session_id: str,
+    sent: list[str],
+    left: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The leave is irreversible. A second call is an error against Recall."""
+
+    def fail(system, messages, schema, schema_name):
+        raise LLMError("the model gave no answer")
+
+    monkeypatch.setattr(intake, "ask_model", fail)
+    _post(client, _bot_event("bot.in_call_recording"))
+    assert left == [BOT_ID]
+
+    _chat(client, "are you there?", message_id="msg_02")
+
+    assert left == [BOT_ID]
+    assert sent == [CONSENT_NOTICE, webhooks.STOPPED_MESSAGE]
+
+
+def test_a_failure_in_the_background_task_puts_the_reason_on_the_session(
+    client: TestClient, session_id: str, left: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fault of the database must not hold the session in `in_progress`."""
+
+    def fail(session_id: str) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(webhooks.loop, "start_intake", fail)
+
+    result = _post(client, _bot_event("bot.in_call_recording"))
+
+    assert result.status_code == 200
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "error"
+    assert session.error_reason == "bot.in_call_recording: database is locked"
+    assert left == [BOT_ID]
+
+
+def test_a_later_event_does_not_take_away_the_error(
+    client: TestClient, session_id: str
+) -> None:
+    """`set_status` writes no event time, so only the terminal rule holds this."""
+    session_store.set_status(session_id, "error", "the model gave no answer")
+
+    _post(client, _timed_event("bot.in_call_recording", LIVE_EVENTS[3][1], BOT_ID))
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "error"
+    assert session.error_reason == "the model gave no answer"
 
 
 def test_a_session_with_no_bot_id_does_not_raise_on_the_leave(
     client: TestClient, left: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A session that got no bot has nothing to take out of a call."""
-    from app.routes import webhooks
-
     session = session_store.create_session(MEETING_URL)
     session_store.set_status(session.id, "complete")
 
@@ -796,8 +930,6 @@ def test_the_leave_waits_before_it_calls_recall(
     client: TestClient, session_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The wait is what keeps the closing line. A delay of 0 makes no call."""
-    from app.routes import webhooks
-
     waited: list[float] = []
     monkeypatch.setattr(webhooks.time, "sleep", lambda seconds: waited.append(seconds))
 

@@ -58,6 +58,36 @@ def test_set_status_without_a_reason_makes_the_reason_empty() -> None:
     assert changed.error_reason is None
 
 
+def test_a_bot_event_does_not_change_a_session_in_error() -> None:
+    """`error` is terminal. The reason is the one thing the frontend shows."""
+    session = session_store.create_session(MEETING_URL)
+    session_store.set_status(session.id, "error", "the model gave no answer")
+
+    applied = session_store.apply_bot_event(
+        session.id, "waiting_for_bot", None, "2026-09-20T05:47:04.508000+00:00"
+    )
+
+    assert applied is False
+    after = session_store.get_session(session.id)
+    assert after is not None
+    assert after.status == "error"
+    assert after.error_reason == "the model gave no answer"
+
+
+def test_a_bot_event_does_not_change_a_complete_session() -> None:
+    session = session_store.create_session(MEETING_URL)
+    session_store.set_status(session.id, "complete")
+
+    applied = session_store.apply_bot_event(
+        session.id, "waiting_for_bot", None, "2026-09-20T05:47:04.508000+00:00"
+    )
+
+    assert applied is False
+    after = session_store.get_session(session.id)
+    assert after is not None
+    assert after.status == "complete"
+
+
 def test_set_summary_writes_the_fields() -> None:
     session = session_store.create_session(MEETING_URL)
 
@@ -194,11 +224,10 @@ def test_a_turn_of_another_session_is_not_in_the_log() -> None:
 
 
 def test_two_appends_at_the_same_time_give_one_turn_and_no_loss() -> None:
-    """The fault of task 3 was that a read and then a write lost a turn.
+    """A read and then a write loses a turn when two messages arrive together.
 
     With the alternation rule, two patient messages at the same time give one
-    turn and one refusal. Neither is decided by which thread was faster to
-    read, which is what the fault was.
+    turn and one refusal. Which thread reads first does not decide the result.
     """
     session = session_store.create_session(MEETING_URL)
     start = threading.Barrier(2)

@@ -50,6 +50,25 @@ def test_post_sessions_refuses_a_bad_mode(client: TestClient) -> None:
     assert result.status_code == 422
 
 
+def test_post_sessions_refuses_a_mode_with_no_implementation(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bot that the backend cannot use must never reach a real meeting."""
+
+    def refuse(meeting_url: str, session_id: str, mode: str = "chat") -> str:
+        raise AssertionError("the route made a bot for a mode it cannot serve")
+
+    monkeypatch.setattr(sessions_route.recall_client, "create_bot", refuse)
+
+    result = client.post(
+        "/sessions",
+        json={"meeting_url": MEETING_URL, "mode": "voice"},
+    )
+
+    assert result.status_code == 400
+    assert "voice" in result.json()["detail"]
+
+
 def test_post_sessions_refuses_a_bad_url(client: TestClient) -> None:
     result = client.post("/sessions", json={"meeting_url": "not-a-url"})
 

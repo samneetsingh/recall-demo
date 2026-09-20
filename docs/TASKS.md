@@ -28,7 +28,8 @@ works end to end.
 - [x] Webhook endpoint(s) for Recall bot status events, verified against Recall's
       signature. `POST /webhooks/recall` verifies with the workspace secret, then maps
       the bot events to the session status. See `task-02-recall-connection/todo.md`.
-      Sam must still make the dashboard webhook endpoint, so no live event has arrived.
+      The dashboard webhook endpoint is made and active, `ep_3JZumFBubz7xBTnyeUonK4U1MfH`,
+      and live `bot.*` events have arrived on it.
 
 ## 3. Mock intake engine
 
@@ -71,9 +72,12 @@ works end to end.
 
 - [x] `handle_incoming_turn` implemented for chat: parses an incoming
       `participant_events.chat_message` event into patient text. It gives
-      `None` for the bot's own message, which the bot receives back, for an
-      empty text, and for a payload shape that it does not know. See
-      `task-05-chat-mode/todo.md`.
+      `None` for a message whose sender name is the bot name, for an empty
+      text, and for a payload shape that it does not know. The payload has no
+      self or bot marker, so the sender name is the only test available. The
+      live call of session 09 then showed that Google Meet sends no event for a
+      message that the bot sent, so this filter did not operate. It stays,
+      because another platform can be different. See `task-05-chat-mode/todo.md`.
 - [x] `send_outgoing_turn` implemented for chat: posts the engine's next
       question with `POST /api/v1/bot/{id}/send_chat_message/`. A question of
       more than 500 characters goes out in two messages, because Google Meet
@@ -82,10 +86,13 @@ works end to end.
 - [x] The wire: `routes/webhooks.py` calls `loop.start_intake` when the bot
       starts to record, and `loop.run_turn` for each chat message, with the
       Svix message id as the `event_id`.
-- [x] The greeting: the create-bot hook `chat.on_bot_join` sends the consent
-      notice of `SPEC.md` and pins it. Google Meet keeps a pinned message
-      visible for a participant who joins later. **The pin needs continuous
-      chat off in the call.**
+- [x] The greeting: **the backend sends the consent notice of `SPEC.md` itself**,
+      with `send_chat_message` and `pin`, immediately before the first question.
+      The create-bot hook `chat.on_bot_join` did this up to session 09 and was
+      removed: Recall sends that message, so its time is not under the control of
+      the backend, and in the live call the first question went out before the
+      notice. Google Meet keeps a pinned message visible for a participant who
+      joins later. **The pin needs continuous chat off in the call.**
 - [x] The closing line: the bot says that the intake is complete when the
       summary is written. It is not a turn, so it is not in the log.
 - [x] `engine/intake.py`, `summary.py`, `prompts.py` and `loop.py` did not
@@ -108,8 +115,11 @@ until the patient removed it. See `task-05a-bot-leave/todo.md`.
 - [x] The leave is **not** on the mode boundary. It is one HTTP call and it is the same
       for chat and for voice, so `app/modes/` did not change and section 6 gets it free.
 - [x] A failed leave is a log line. The summary is written and the status is `complete`.
-- [x] A session in `error` keeps its bot. An error usually means that the bot takes no
-      command, so the leave would fail in the same manner.
+- [x] **A session in `error` also leaves the call.** Changed after this item was first
+      written: the usual error is a failed model call, and the bot itself is in good
+      health, so it takes the command. The patient must not have to remove a bot that
+      stopped. The error path says its own last line first, which tells the patient that
+      a technical problem stopped the intake.
 - [x] Proved in a live Google Meet call, 2026-09-20. Bot
       `193f426d-ba66-4cdc-ba6a-3ac67b642f2e`: the closing line went out at 09:21:17.393,
       Recall logged `bot_received_leave_call` at 09:21:20.686, and
@@ -117,18 +127,54 @@ until the patient removed it. See `task-05a-bot-leave/todo.md`.
       second wait and 0.29 seconds of overhead. Sam saw the closing line in the chat
       before the bot left, so the delay is long enough.
 
-## 6. Voice mode (stretch, added alongside chat mode, not a rewrite of it)
+## 5b. Hardening of the live paths
 
-- [ ] OpenAI TTS wired up on the backend.
-- [ ] `send_outgoing_turn` implemented for voice: calls TTS, sends output audio
-      through Recall.
-- [ ] Backend subscribes to real-time transcript.
-- [ ] Silence-gap turn-taking logic implemented.
-- [ ] `handle_incoming_turn` implemented for voice: turns a transcript-gap
-      signal into patient text.
-- [ ] Full loop tested against a real Google Meet call, start to summary.
-- [ ] Chat mode still works unchanged (it should not need to be touched to add
-      this).
+Done in the last session before the submission. No new dependency and no new route.
+
+- [x] `POST /sessions` refuses a mode that has no implementation. It tests the `MODES`
+      registry and gives HTTP 400 with `the mode <x> has no implementation`, **before**
+      the session row and before the bot. A bot costs money and joins a real meeting.
+- [x] `bot.call_ended` branches on its sub-code. A normal end gives `complete` with no
+      reason, and a fault, an unknown or an absent sub-code gives `error` with the raw
+      `call_ended:<sub_code>`. The list of normal sub-codes is never treated as the whole
+      set of the values Recall can send.
+- [x] `error` is terminal, the same as `complete`. A later bot event cannot take a
+      session out of `error` and cannot erase its reason. `apply_bot_event` holds the
+      rule in one conditional `UPDATE`.
+- [x] Zero data retention. `recording_config` sends `"retention": null` and no video key.
+      Chat mode subscribes to `participant_events.chat_message` only and names no
+      transcript provider.
+- [x] `automatic_leave` is set and not left to the defaults.
+      `everyone_left_timeout` is `{"timeout": 120}`, because the default 2 seconds is less
+      than a Meet tab reload and the bot cannot come back. `noone_joined_timeout` is 300.
+- [x] `leave_call` retries one time after a transient failure: a network fault, HTTP 429
+      or an HTTP 5xx. It does not retry an HTTP 400, 401 or 404.
+- [ ] **A partial summary for a call that ended early.** Scoped and cut for time. A call
+      that ends before the last question now reaches `complete` with no summary, and
+      `GET /sessions/{id}/summary` then gives HTTP 500. The README and `API_REFERENCE.md`
+      state the gap.
+
+## 6. Voice mode (a stretch goal, unfinished, on the branch `feat/voice-mode`)
+
+**This section is not on `main`.** `main` ships chat mode only, and `POST /sessions`
+with the mode `voice` gives HTTP 400 there. The work below is on the branch
+`feat/voice-mode`. It is built and tested against the container, and **it is not proved
+in a live Google Meet call**, so it was not merged. See
+`../session-logs/11-voice-mode.md` on that branch.
+
+- [x] OpenAI TTS wired up on the backend. (branch)
+- [x] `send_outgoing_turn` implemented for voice: calls TTS, sends output audio
+      through Recall. A voice bot needs an `automatic_audio_output` configuration
+      with a short silent mp3, or the output-audio endpoint gives HTTP 400. (branch)
+- [x] Backend subscribes to real-time transcript. (branch)
+- [x] Silence-gap turn-taking logic implemented. The parts of one spoken answer wait
+      in a `voice_buffers` table, and a gap of 2.5 seconds ends the turn. (branch)
+- [x] `handle_incoming_turn` implemented for voice: turns a transcript-gap
+      signal into patient text. (branch)
+- [ ] **Full loop tested against a real Google Meet call, start to summary. Not done.**
+      This is the reason the branch is not on `main`.
+- [x] Chat mode still works unchanged. `git diff` on `app/modes/chat.py` and on the
+      four engine modules gives no line. (branch)
 
 ## 7. Frontend
 
@@ -150,7 +196,8 @@ step and no new dependency. See `task-07-frontend/todo.md`.
 
 ## 8. Deploy for real
 
-- [ ] Backend deployed on the homelab server, tunnel live.
+- [x] Backend deployed on the homelab server, tunnel live. Sam deployed at the end of
+      session 09, and session 10 ran two live calls against it.
 - [x] Frontend deployed to Workers. Version `c2219c53-0508-4f92-9777-b61007307f0c`
       on `recall.samneet.com`, 2026-09-20.
 - [x] Full flow tested against the live URLs, not localhost. 2026-09-20:
@@ -166,11 +213,11 @@ one file.
 - [ ] Make a small evaluation: more than one scripted patient, the same prompts, and a
       look at each summary. Sam has a synthetic suite from an earlier project that ran
       the same intake against other models. Use its shape.
-- [ ] **The order of the first two messages.** The pinned notice comes from Recall,
-      through the create-bot hook, and the first question comes from this backend. In
-      session 09 the question went out 1.74 seconds after the join and the notice came
-      after it. This is a code choice and not a prompt, so it is not part of this
-      section. See `../session-logs/09-chat-mode.md`.
+- [x] **The order of the first two messages. Repaired.** The pinned notice came from
+      Recall, through the create-bot hook, so its time was not under the control of the
+      backend: in session 09 the question went out 1.74 seconds after the join and the
+      notice came after it. The hook is removed and the backend sends both, in order.
+      This was a code choice and not a prompt. See `../session-logs/09-chat-mode.md`.
 - [ ] **The first question introduces the assistant a second time.** The pinned
       notice says "I am an AI intake assistant, not a physician", and the live call of
       session 09 then gave "Hello, I'm the intake assistant. Can you tell me about your
@@ -196,13 +243,25 @@ one file.
 
 ## 9. Docs pass
 
-- [ ] README finished: links at top, narrative, setup instructions, limitations.
-- [ ] ARCHITECTURE.md finished.
-- [ ] API_REFERENCE.md finished (your own backend endpoints).
-- [ ] Repo pushed to github.com/samneetsingh/recall-demo.
+Done in the last session before the submission, after a review of each document against
+the code.
+
+- [x] README finished: links at top, narrative, setup instructions, limitations.
+- [x] ARCHITECTURE.md finished.
+- [x] API_REFERENCE.md finished (your own backend endpoints). The 400 for a mode with no
+      implementation, the `bot.call_ended` branch, the terminal `error`, the leave on the
+      error path, and the corrected recipe for a new mode.
+- [x] API_CONTRACT.md reconciled. The top half now agrees with the answers below it, the
+      dashboard webhook endpoint is marked closed, and the echo claim is corrected against
+      the live call of session 09.
+- [x] TASKS.md reconciled with the code and the branches. This file.
+- [ ] Repo pushed to github.com/samneetsingh/recall-demo. Owner: Sam.
 
 ## If time runs out
 
 Cut voice mode, not chat mode. Cut deploy polish, not the working loop. The
 "Limitations & Next Steps" section in the README is where you say what you cut and
-why — that is a legitimate part of the deliverable, not a failure to hide.
+why. That is a legitimate part of the deliverable, not a failure to hide.
+
+**This is what happened.** Voice mode is on the branch `feat/voice-mode` and it is not
+merged, because no live call proved it. Chat mode works end to end on `main`.

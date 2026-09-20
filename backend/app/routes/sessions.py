@@ -12,6 +12,7 @@ from pydantic import BaseModel, HttpUrl
 
 from app.db import session_store
 from app.db.models import Mode, Session
+from app.modes.base import MODES
 from app.recall import client as recall_client
 from app.recall.client import RecallError
 
@@ -63,6 +64,13 @@ def create_session(request: CreateSessionRequest) -> CreateSessionResponse:
     result is 201 with the status `error`, and the frontend reads the reason
     from its poll of `GET /sessions/{id}`.
     """
+    if request.mode not in MODES:
+        # A bot costs money and joins a real meeting. The test is against the
+        # modes with an implementation, so a new mode needs no change here.
+        raise HTTPException(
+            status_code=400, detail=f"the mode {request.mode} has no implementation"
+        )
+
     session = session_store.create_session(str(request.meeting_url), request.mode)
 
     try:

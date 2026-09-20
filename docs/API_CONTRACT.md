@@ -1,4 +1,4 @@
-# API_CONTRACT — Recall.ai
+# API_CONTRACT: Recall.ai
 
 Internal reference for the Recall.ai endpoints, webhooks, and event payloads this
 project uses. Check this before writing a Recall API call, and update it if the real
@@ -25,6 +25,42 @@ Minimum body:
 
 A bot is single-use and maps to one meeting. Bot ID comes back in the response; store
 it against the session in SQLite.
+
+**What this build adds to that minimum.** `app/recall/client.py` sends `metadata` with
+the session id, a `recording_config`, and an `automatic_leave`. There is no `chat` hook:
+see the paragraph below.
+
+```json
+{
+  "metadata": { "session_id": "..." },
+  "recording_config": {
+    "participant_events": {},
+    "retention": null,
+    "realtime_endpoints": [
+      { "type": "webhook", "url": "https://.../webhooks/recall",
+        "events": ["participant_events.chat_message"] }
+    ]
+  },
+  "automatic_leave": {
+    "everyone_left_timeout": { "timeout": 120 },
+    "noone_joined_timeout": 300
+  }
+}
+```
+
+- **`"retention": null` is zero data retention.** Recall keeps no audio, no video and no
+  transcript of the call. The demo needs the live events only.
+- **No video key at all.** Chat mode needs no media, so the request asks for none.
+- **Chat mode subscribes to `participant_events.chat_message` only** and it names no
+  transcript provider. Voice mode adds the `recallai_streaming` provider and the event
+  `transcript.data` to the same two fields. Zero data retention supports the mode
+  `prioritize_low_latency` only.
+- The shapes of the two `automatic_leave` fields are different.
+  `everyone_left_timeout` is an object with `timeout` and `activate_after`, and
+  `noone_joined_timeout` is a plain number of seconds.
+
+Method: `recall-ai` MCP, `get_doc` for `automatic-leaving-behavior`, and
+`app/recall/client.py`.
 
 ## Chat messages (Mode 1)
 
@@ -68,8 +104,17 @@ endpoint and `pin`, immediately before the first question.
 
 The text is at `data.data.data.text` and the sender is at
 `data.data.participant.name`. **The payload has no field that says "the bot sent this".**
-The bot receives its own messages back, so the backend compares the sender name with
-`RECALL_BOT_NAME`.
+The backend therefore compares the sender name with `RECALL_BOT_NAME` and drops a match.
+
+**Google Meet does not send an event for a message that the bot sent.** The live call of
+session 09 proved it: the log line for a dropped message is not in the container log of
+the call, and no bot question is in the turns table as a patient turn. The echo filter
+did not operate one time in that call. Keep it: the payload gives no marker, so the
+behavior could not be known without a live test, the document does not promise it, and
+another platform can be different.
+
+Method: the container log and the turns table of session
+`ac7fe64a52114045acb4180f241ad88b`. See `../session-logs/09-chat-mode.md`.
 
 **A real-time event is not a dashboard event.** It goes directly to the URL of the
 create-bot request, it is not in the Webhooks console, and Recall retries it up to 60
@@ -82,45 +127,72 @@ meeting. The result is HTTP 200 with the bot object, or HTTP 400 with no body. T
 is 300 requests each minute for one workspace. `get_doc` for `bot_leave_call_create`.
 
 **It is irreversible.** The bot cannot come back, and a new bot needs a new session.
-The backend calls it one time, after the closing line of a complete intake.
+The backend calls it after the last line of the intake, on the success path and on the
+error path. The usual error is a failed model call, and the bot itself is in good health,
+so it takes the command. A patient must not have to remove the bot.
+
+**The one retry.** `leave_call` in `app/recall/client.py` makes a second attempt, 2
+seconds later, after a transient failure: a network fault, HTTP 429 or an HTTP 5xx. It
+does not retry an HTTP 400, 401 or 404, because a second identical request gives the same
+answer. A bot left behind sits in the patient's meeting, so the one retry is worth its
+cost. A failed leave is a log line only: the status of the session and its reason do not
+change.
 
 **There is no endpoint that ends a meeting for all participants.** The bot is an
 ordinary participant and not the host, and Google Meet gives that action to the host
 only. The bot can remove itself and nothing more.
 
-**The bot also leaves by itself, but late.** `automatic_leave.everyone_left_timeout` has
-the default 2 seconds, so a bot goes 2 seconds after the last participant.
+**The bot also leaves by itself, but the defaults do not suit an intake.**
+`everyone_left_timeout` has the default 2 seconds, so a bot goes 2 seconds after the last
+participant. That is less than a Meet tab reload, and the bot cannot come back, so the
+session dies with it. `noone_joined_timeout` has the default 1200 seconds,
 `silence_detection` is 3600 seconds after a buffer of 1200 seconds, and
 `in_call_not_recording_timeout` is 3600 seconds. A patient who keeps the call open thus
-sees a silent bot for one hour. This is why the backend calls `leave_call` and does not
-wait for a timeout. `get_doc` for `automatic-leaving-behavior`.
+sees a silent bot for one hour.
+
+**This build sets two of them.** `everyone_left_timeout` is `{"timeout": 120}`, which
+holds the bot through a reload, and `noone_joined_timeout` is 300, because the patient is
+already in the call. The other defaults stay. The backend still calls `leave_call` at the
+end and does not wait for a timeout. `get_doc` for `automatic-leaving-behavior`.
 
 ## Real-time transcript (Mode 2)
 
-- Set the transcription provider to Recall's own transcription when creating the bot.
-- Subscribe to real-time transcript events (webhook or WebSocket, confirm which one
-  this build uses once implemented).
+Mode 2 is voice mode. It is not on `main`: the branch `feat/voice-mode` holds it, and no
+live call has proved it. The research below is complete and it is checked against the
+live documents.
+
+Each question here is answered below, in "Answers to the open questions".
+
+- Set the transcription provider to Recall's own transcription in the create-bot request.
+  `recording_config.transcript.provider` and `recording_config.realtime_endpoints` are
+  necessary together.
+- **The delivery is a webhook, not a WebSocket.** This is settled. See the answer below
+  for the reason and for the full configuration.
 - Use gaps in new transcript text as the turn-taking signal: after N seconds with no
   new transcript, treat the patient's turn as done and pass it to the engine.
 
 ## Output audio (Mode 2)
 
-- See "Output Speech/Audio from the Bot" in the docs.
-- Backend generates audio with OpenAI TTS, then sends it to Recall's output-audio
-  endpoint/stream so the bot plays it into the meeting.
-- Confirm expected audio format/encoding in the docs before wiring this up; do not
-  assume it matches OpenAI TTS's default output format.
+- `POST /api/v1/bot/{id}/output_audio/`. See "Output Speech/Audio from the Bot".
+- The backend makes the audio with OpenAI TTS and sends it to that endpoint.
+- **The format is settled: mp3, as a base64 string.** OpenAI TTS gives mp3 by default, so
+  no conversion is necessary. See the answer below, which also gives the
+  `automatic_audio_output` precondition.
 
 ## Bot status webhooks
 
-- Subscribe to bot status change events (joining, in_call, done, error states).
+- Subscribe to bot status change events (joining, in_call, done, error states) on the
+  **dashboard** endpoint. It is made, and it is active. See "Webhook configuration" below.
 - Use these to update session status for the frontend to poll (e.g. "waiting,"
   "bot joined," "interview in progress," "complete," "error").
+- The sub-codes and the status map are below.
 
 ## Webhook verification
 
 - Recall signs webhook/callback requests. Verify signatures on the backend before
   trusting payloads. See "Verifying webhooks, websockets and callback requests."
+- **How this build does it** is below, after the answers: `svix`, with the workspace
+  verification secret.
 
 ## Answers to the open questions
 
@@ -258,11 +330,11 @@ session status `error`:
 | `bot_errored` | An unexpected error in the bot |
 | `failed_to_launch_in_time` | A problem of the Recall infrastructure |
 
-These `bot.call_ended` sub-codes are normal, not an error. Do not make the status
-`error` for them:
+These `bot.call_ended` sub-codes are normal, not an error:
 
 | Sub code | Meaning |
 |---|---|
+| `bot_received_leave_call` | The backend called `leave_call` at the end of the intake |
 | `call_ended_by_host` | The host ended the call |
 | `bot_kicked_from_call` | The host removed the bot |
 | `timeout_exceeded_everyone_left` | The other participants left |
@@ -270,9 +342,26 @@ These `bot.call_ended` sub-codes are normal, not an error. Do not make the statu
 | `call_ended_by_platform_waiting_room_timeout` | The Google Meet waiting room timeout is 10 minutes |
 | `timeout_exceeded_silence_detected` | Recall thinks that only bots are in the call |
 
-A demo that ends before the intake is complete must make the status `complete` or
-`error` with the sub-code as the reason. The frontend polls, and it must not wait for a
-session that has no bot in the call.
+**`bot.call_ended` branches on its sub-code.** `routes/webhooks.py` holds the list above
+as `NORMAL_CALL_ENDED`:
+
+| The sub-code of `bot.call_ended` | `status` | `error_reason` |
+|---|---|---|
+| One from the table above | `complete` | `null` |
+| A fault sub-code from the first table | `error` | `call_ended:<sub_code>` |
+| A value that the list does not hold | `error` | `call_ended:<sub_code>` |
+| Absent | `error` | `call_ended:unknown` |
+
+The last two rows follow the rule above: the `sub_code` is not an enum, so an unknown
+value must not stop the application and must keep its raw text. `NORMAL_CALL_ENDED` is
+therefore a list of the values that are known to be normal, and never the whole set of
+the values Recall can send.
+
+Both results are terminal, the same as each other. The frontend polls, and it must not
+wait for a session that has no bot in the call. **This has a cost that the demo accepts:**
+a call that ends before the last question reaches `complete` with no summary, and
+`GET /sessions/{id}/summary` then gives HTTP 500. A partial summary was scoped and cut
+for time. See `API_REFERENCE.md`.
 
 Method: `recall-ai` MCP, `get_doc` for `sub-codes` and `bot-status-change-events`.
 
@@ -306,12 +395,18 @@ hours.
 Method: `recall-ai` MCP, `get_doc` for `authenticating-requests-from-recallai`, and the
 installed source of `svix` and `standardwebhooks`.
 
-## Webhook configuration: an open item
+## Webhook configuration: closed
 
-`list_webhook_endpoints` on the `Sandbox` workspace gives an empty list. **No dashboard
-webhook endpoint exists at this time.** The bot status events have no destination. Make
-the endpoint in the Recall dashboard before the task that receives the events. This is a
-manual task for a human, in the dashboard.
+**The dashboard webhook endpoint is made and it is active.** Session 05 made it. The id
+is `ep_3JZumFBubz7xBTnyeUonK4U1MfH`, the URL is
+`https://recall-api.ss-ubuntu-01.net/webhooks/recall`, and `active` is true. It carries
+the 9 necessary `bot.*` events and the 4 `bot.breakout_room_*` events. The 4 extra events
+do no harm: the handler has no rule for them, so it writes a log line and makes no
+change. `send_test_webhook_endpoint` delivered to the live backend.
+
+**Setup note.** This endpoint is a manual step for a human, one time, in the Recall
+dashboard. There is no code in this repo that makes it. A new workspace needs the
+endpoint and the workspace verification secret before any `bot.*` event can arrive.
 
 Two different configurations send events, and this demo uses both:
 

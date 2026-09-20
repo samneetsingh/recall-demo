@@ -139,7 +139,12 @@ def apply_bot_event(
 
     Recall delivers the events out of order, so the time of the event decides,
     not the time it arrived. An event that is not newer than the last one is
-    refused, and a session that is `complete` does not change.
+    refused.
+
+    `complete` and `error` are terminal. The event time alone does not keep
+    them: `set_status` writes no `last_event_at`, so a session that a failed
+    model call put in `error` has none, and the next event would take away its
+    status and its reason.
     """
     with connect() as connection:
         cursor = connection.execute(
@@ -148,7 +153,7 @@ def apply_bot_event(
                SET status = ?, error_reason = ?, updated_at = ?,
                    last_event_at = COALESCE(?, last_event_at)
              WHERE id = ?
-               AND status != 'complete'
+               AND status NOT IN ('complete', 'error')
                AND (? IS NULL OR last_event_at IS NULL OR last_event_at < ?)
             """,
             (status, error_reason, _now(), event_at, session_id, event_at, event_at),
