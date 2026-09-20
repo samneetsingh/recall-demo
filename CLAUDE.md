@@ -2,6 +2,22 @@
 
 This file gives Claude Code context for the `recall-demo` repo. Read this first, every session.
 
+## Session logs — required, every session
+
+At the end of every session where you changed code (not for a session that was pure
+discussion), write a session log:
+
+1. Copy `docs/session-logs/TEMPLATE.md` to `docs/session-logs/NN-short-topic.md`,
+   where `NN` is the next number in sequence (check the directory for the highest
+   existing number first).
+2. Fill it in based on what actually happened this session.
+3. Do this before the session ends, not "next time." If you are not sure whether a
+   session counts, write the log — a short log costs nothing, a missing one loses
+   real information.
+
+This is not optional formatting. Skipping it is a build error, the same category as
+skipping a task in `docs/TASKS.md`.
+
 ## What this project is
 
 A demo app for the Recall.ai technical interview. It shows a real use case for the Recall
@@ -56,11 +72,10 @@ different places and can fail independently.
 
 - Don't add a new dependency without flagging it first.
 - Don't touch `frontend/` while working a `backend/` task, or vice versa, in the same turn.
-- Keep the mock intake logic in one clearly named module (e.g. `backend/engine/`), not
-  scattered across route handlers.
+- Keep the mock intake logic in one clearly named module (e.g. `backend/engine/`), not scattered across route handlers.
 - SQLite is fine for this demo. No migrations framework needed, keep the schema small.
-- No HIPAA-related controls in this build. Note it as a next step in the README, not
-  something to implement now.
+- No HIPAA-related controls in this build. Note it as a next step in the README, not something to implement now.
+- When creating any documentation or communicating with the user, utilize ASD-STE100 conventions.
 
 ## What "done" looks like
 

@@ -1,2 +1,9 @@
 .DS_Store
-.venv
+
+# Secrets. Never commit a real .env file. The .env.example files stay in git.
+.env
+
+# Python, backend/
+.venv/
+__pycache__/
+*.py[cod]

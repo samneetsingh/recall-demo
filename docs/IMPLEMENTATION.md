@@ -27,7 +27,8 @@ backend/
     db/
       models.py             SQLite schema (sessions table)
       session_store.py      Read/write helpers, no raw SQL outside this file
-    config.py               Env vars: RECALL_API_KEY, OPENAI_API_KEY, DB path
+    config.py               pydantic-settings. Env vars: RECALL_API_KEY,
+                            OPENAI_API_KEY, DB path, CORS_ORIGINS
 ```
 
 Rule: `routes/` files stay thin. A route handler reads the request, calls into
@@ -148,7 +149,10 @@ speaking. Implementation approach:
 Matches `TASKS.md`, restated at the module level:
 
 1. `db/`, `config.py`, `routes/sessions.py` returning stubbed data, no Recall
-   calls yet. Confirms the frontend/backend wiring works.
+   calls yet. Confirms the frontend/backend wiring works. Task 1 made `config.py`
+   with plain module constants. Change it to a `pydantic-settings` `BaseSettings`
+   class here, and add `pydantic-settings` to `pyproject.toml`. The import in
+   `app/main.py` does not change.
 2. `recall/client.py` create-bot call, `routes/webhooks.py` receiving real bot
    status events. Confirms the Recall connection works.
 3. `engine/intake.py` and `engine/summary.py`, tested standalone against a

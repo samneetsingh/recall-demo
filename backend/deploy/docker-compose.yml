@@ -1,0 +1,28 @@
+# The backend stack for the Recall demo.
+# Start the stack from the `backend/` directory:
+#     docker compose -f deploy/docker-compose.yml up -d --build
+
+name: recall-api
+
+services:
+  api:
+    container_name: recall-api
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: recall-api:latest
+    restart: unless-stopped
+    env_file:
+      - path: ../.env
+        required: false
+    # Make port 8000 available on the `recall-api_default` network only. Do not
+    # publish the port to the host. The tunnel and nginx supply the access from
+    # outside.
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

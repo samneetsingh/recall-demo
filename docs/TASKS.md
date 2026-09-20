@@ -14,6 +14,8 @@ works end to end.
 
 - [ ] Poetry project initialized, FastAPI running.
 - [ ] SQLite schema: sessions table (id, meeting_url, status, transcript log, summary).
+- [ ] `config.py` migrated from plain constants to `pydantic-settings`
+      (adds the `pydantic-settings` dependency).
 - [ ] Recall API key stored as an environment variable, never committed.
 - [ ] Endpoint: create session (takes a meeting URL, creates a Recall bot).
 - [ ] Endpoint: get session status.
