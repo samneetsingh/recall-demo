@@ -101,10 +101,10 @@ backend/
 - [x] Keep the values of the keys out of the repository.
 - [x] Start the containers on the local machine.
 - [x] Check the `/health` route on the local machine. The result must be HTTP 200.
-- [ ] Copy the backend files to the homelab server.
-- [ ] Start the backend stack on the homelab server.
-- [ ] Restart the nginx stack. The external network is available after the first start.
-- [ ] Check `https://recall-api.ss-ubuntu-01.net/health` from outside the network.
+- [x] Copy the backend files to the homelab server.
+- [x] Start the backend stack on the homelab server.
+- [x] Restart the nginx stack. The external network is available after the first start.
+- [x] Check `https://recall-api.ss-ubuntu-01.net/health` from outside the network.
       The result must be HTTP 200.
 
 ## Frontend procedure — 1c
@@ -161,7 +161,7 @@ frontend/
 
 ## Done criteria
 
-- [ ] `https://recall-api.ss-ubuntu-01.net/health` gives HTTP 200 from outside the
+- [x] `https://recall-api.ss-ubuntu-01.net/health` gives HTTP 200 from outside the
       network.
 - [ ] `https://recall.samneet.com/` gives HTTP 200 from outside the network.
 - [ ] A browser request from the frontend to the backend is successful. The CORS

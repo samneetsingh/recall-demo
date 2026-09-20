@@ -5,10 +5,10 @@ works end to end.
 
 ## 1. Infra first
 
-- [ ] Cloudflare Tunnel running on the homelab server.
-- [ ] `recall-api.ss-ubuntu-01.net` resolves and hits a placeholder FastAPI route.
+- [x] Cloudflare Tunnel running on the homelab server.
+- [x] `recall-api.ss-ubuntu-01.net` resolves and hits a placeholder FastAPI route.
 - [ ] `recall.samneet.com` resolves via Cloudflare Workers, serves a placeholder page.
-- [ ] CORS configured on the backend for the frontend origin.
+- [x] CORS configured on the backend for the frontend origin.
 
 ## 2. Backend skeleton
 

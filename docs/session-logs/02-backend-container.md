@@ -4,16 +4,18 @@ Written in ASD-STE100 Simplified Technical English.
 
 - **Date:** 2026-09-19
 - **Task:** Section 1 of [`../TASKS.md`](../TASKS.md), items 1b and 1d
-- **Result:** partial — the backend container operates on the local machine. The
-  deploy to the homelab server is not done.
+- **Result:** complete for 1b and 1d — `https://recall-api.ss-ubuntu-01.net/health`
+  gives HTTP 200 from outside the network. Item 1c, the frontend Worker, is not
+  started.
 
 ## Summary
 
 The session made the backend Poetry project, the FastAPI placeholder application, the
 Dockerfile and the Compose stack. The session added the CORS configuration for the
-frontend origin. The session built the image and started the stack on the local
-machine. The `/health` route gives HTTP 200. The session did not change `frontend/` and
-did not deploy to the homelab server.
+frontend origin. Sam deployed the stack to the homelab server and corrected two faults
+in the external infrastructure with commands from the session. Items 1b and 1d are
+complete: `https://recall-api.ss-ubuntu-01.net/health` gives HTTP 200 from outside the
+network. The session did not change `frontend/`.
 
 ## Files changed
 
@@ -177,6 +179,79 @@ did not deploy to the homelab server.
 - **Dashboard webhooks use the workspace verification secret.** Method: `get_info`.
   `dashboard_uses_workspace_verification_secret` is `true`. Task 2 verifies the
   signature against that secret. `get_webhook_verification_secret` gives it.
+- **The backend stack operates on the homelab server.** Method: the server pulled
+  commit `1adcd6c` with `git clone` over SSH into `~/docker/recall-demo`.
+  `docker compose -f deploy/docker-compose.yml up -d --build` gave
+  `Network recall-api_default Created` and `Up (healthy)`.
+  `docker exec recall-api curl -sS http://127.0.0.1:8000/health` gave
+  `{"status":"ok"}`.
+- **The internal path from nginx to the container operates.** Method:
+  `docker exec nginx curl -sS http://recall-api:8000/health` on the server gives
+  `{"status":"ok"}`. The nginx stack is at `~/docker/nginx-proxy`. It is plain
+  `nginx:alpine` with files in `conf.d/`, not an automatic proxy image. It joins
+  `recall-api_default` as an external network. The file
+  `conf.d/recall-api.ss-ubuntu-01.net.conf` sends the requests to
+  `http://recall-api:8000`.
+- **The server has Docker Compose v2.39.4.** Method: `docker compose version`. This
+  version accepts the long `env_file` syntax, which needs 2.24 or more.
+- **A `proxy_pass` to a container that does not operate stops all of nginx.** Method:
+  the restart of the nginx stack gave
+  `[emerg] host not found in upstream "overseerr"`, and the container went into a
+  restart loop. nginx resolves a `proxy_pass` host name at the time it reads the
+  configuration. One container that is not in operation stops the full proxy. nginx
+  had been in operation from before that container stopped, so the restart showed a
+  fault that was already there. Start the backend stack, then look at
+  `docker logs nginx` after the restart of the nginx stack. Do not assume that the
+  restart is successful.
+- **The DNS record for `recall-api.ss-ubuntu-01.net` now exists.** Method:
+  `dig +short` gives `104.21.47.191` and `172.67.172.34`, which are Cloudflare
+  addresses. The start state in `../task-01-infra/todo.md` recorded `NXDOMAIN`.
+- **The tunnel has no ingress rule for `recall-api.ss-ubuntu-01.net`.** Method:
+  `curl -sSI https://recall-api.ss-ubuntu-01.net/health` gives HTTP 404 with an empty
+  body, while `docker exec nginx curl http://recall-api:8000/health` gives HTTP 200.
+  nginx gives an HTML page with its 404. An empty body is from cloudflared. A stopped
+  nginx gives 502, not 404, so the fault is in the ingress rules.
+- **`https://recall-api.ss-ubuntu-01.net/health` gives HTTP 200 from outside the
+  network.** Method: `curl` from the local machine with `--resolve`, to go around a
+  stale negative DNS entry. The body is `{"status":"ok"}`. The `/` route gives HTTP 200
+  and the placeholder body. Item 1b is complete.
+- **CORS operates over the live URL.** Method: an `OPTIONS` preflight to
+  `https://recall-api.ss-ubuntu-01.net/health`. `https://recall.samneet.com` gives
+  HTTP 200 with the origin returned and `access-control-allow-credentials: true`.
+  `https://evil.example.com` gives HTTP 400 with no `access-control-allow-origin`
+  header. Item 1d is complete.
+- **`curl -I` gives HTTP 405 on this API.** Method:
+  `curl -I https://recall-api.ss-ubuntu-01.net/health`. `curl -I` sends a `HEAD`
+  request. FastAPI registers `@app.get()` for the `GET` method only. Plain Starlette
+  adds `HEAD` to a `GET` route, but FastAPI does not. Use `curl -i` or plain `curl` to
+  check a route. A 405 with `content-type: application/json` shows that the application
+  answered, so the full path operates.
+- **`cloudflared tunnel route dns` makes the DNS record only.** Method: the command
+  `cloudflared tunnel route dns ss-ubuntu-01-tunnel recall-api.ss-ubuntu-01.net` made
+  the record, but the hostname gave HTTP 404 with an empty body. An ingress rule in
+  `config.yml` is a second, separate step. cloudflared gives an empty-body 404 when no
+  ingress rule matches the hostname.
+- **One incorrect ingress rule stops the full tunnel.** Method: the new rule had
+  `  - service: http://nginx:80` with a list dash. YAML then made two rules: one
+  hostname with no service, and one service with no hostname. cloudflared gave
+  `Couldn't start tunnel error=" is an invalid address"` and every hostname on both
+  zones gave HTTP 530. The correct form puts `service` on the line after `hostname`,
+  with four spaces and no dash. Check a new rule with
+  `docker run --rm -v <dir>:/home/nonroot/.cloudflared cloudflare/cloudflared:latest
+  tunnel ingress validate` before a restart.
+- **The cloudflared image is distroless.** Method: `docker exec cloudflared ls` gives
+  `executable file not found`. There is no shell and no coreutils. Read the
+  configuration from the host. The mount is
+  `~/docker/cloudflare-tunnel/cloudflared -> /home/nonroot/.cloudflared`.
+- **macOS keeps a negative DNS entry.** Method: `dig +short` gave the Cloudflare
+  addresses, but `curl` gave `Could not resolve host` at the same time. `dig` asks the
+  name server directly. `curl` uses the system resolver, which had the earlier
+  `NXDOMAIN` in its cache. Correct it with
+  `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`.
+- **A tunnel needs about 20 seconds to register after a restart.** Method: a check one
+  second after `docker restart cloudflared` gave HTTP 530. The same check after 25
+  seconds gave HTTP 200. Look for four `Registered tunnel connection` lines in
+  `docker logs cloudflared` before a test.
 - **The resolved dependency versions are fastapi 0.141.1 and uvicorn 0.53.0.** Method:
   `poetry add fastapi "uvicorn[standard]"`. The versions are in `poetry.lock`.
 - **Docker Desktop was not in operation at the start of the session.** Method:
@@ -194,26 +269,40 @@ did not deploy to the homelab server.
 - **Wrong:** The first `main.py` held the CORS lists directly.
   **Correct:** `docs/IMPLEMENTATION.md` already specified `app/config.py`. Read the
   module layout in that document before you put a value in `main.py`.
+- **Wrong:** The session gave commands that test a service immediately after a start or
+  a restart. Three checks failed for this reason: the container check one second after
+  `up -d`, the tunnel check one second after `docker restart`, and the tunnel check 25
+  seconds later. **Correct:** Put a wait or a status check before a test. Look for
+  `(healthy)` for a container, and for `Registered tunnel connection` for a tunnel.
+- **Wrong:** `../task-01-infra/todo.md` says item 1a, the Cloudflare Tunnel, is
+  complete. **Correct:** The tunnel was in operation, but it had no ingress rule and no
+  DNS record for this hostname. A component that operates is not the same as a
+  component that is configured for your hostname. Test the full path, not the process.
 
 ## Open items
 
-- [ ] Copy `backend/` to the homelab server and start the stack. Owner: Sam. This
-      session had no SSH access to the server.
-- [ ] Restart the nginx stack after the first start of the backend stack. Owner: Sam.
-      The network `recall-api_default` does not exist before the first start.
-- [ ] Check `https://recall-api.ss-ubuntu-01.net/health` from outside the network.
-      Owner: Sam.
-- [ ] The tunnel configuration for `recall-api.ss-ubuntu-01.net`. Owner: Sam.
+- [ ] The two `overseerr` files in `~/docker/nginx-proxy/conf.d.disabled/`. Owner: Sam.
+      Put them back after the container operates again, or change them to the
+      `resolver` pattern.
+- [ ] The `Upgrade` and `Connection` headers in
+      `~/docker/nginx-proxy/conf.d/recall-api.ss-ubuntu-01.net.conf`. Owner: Sam. The
+      file has no websocket headers now. Task 4 needs them for the real-time
+      transcript. `config.yml.bak` and `conf.d.backup` are on the server.
+- [ ] The DNS cache on the local machine. Owner: Sam. Run
+      `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`. The negative
+      entry for `recall-api.ss-ubuntu-01.net` is still in the cache.
 - [ ] `backend/.env` on the homelab server. Owner: Sam. Copy `.env.example` and put the
       values in it. Task 2 needs the keys. The placeholder routes do not need them.
 - [ ] The frontend Worker, item 1c. Owner: the next session.
 - [ ] Approval for `wrangler deploy`. Owner: Sam. The command changes a live domain.
-- [ ] Section 1 of `../TASKS.md` is not changed. Owner: the deploy session. Mark items
-      1b, 1c and 1d when the live URLs give HTTP 200.
+- [ ] Item 1c in `../TASKS.md`. Owner: the next session. Items 1a, 1b and 1d are
+      marked complete.
 - [ ] The four open questions in [`../API_CONTRACT.md`](../API_CONTRACT.md). Owner: the
       task 2 session. The `recall-ai` MCP server is authorized and can answer them.
 
 ## Next session starts here
+
+Items 1a, 1b and 1d are complete. Only item 1c remains in task 1.
 
 Build the frontend Worker. Follow the frontend procedure in
 [`../task-01-infra/todo.md`](../task-01-infra/todo.md).
