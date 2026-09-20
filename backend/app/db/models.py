@@ -80,6 +80,21 @@ MIGRATIONS: list[str] = [
       FROM sessions s, json_each(COALESCE(s.transcript, '[]')) t;
     """,
     "ALTER TABLE sessions DROP COLUMN transcript;",
+    # Voice mode. One `transcript.data` utterance is not a turn: a patient
+    # answers in parts. The parts wait here until a silence ends the turn.
+    # The partial index is what makes one open buffer for one session.
+    """
+    CREATE TABLE IF NOT EXISTS voice_buffers (
+        id            INTEGER PRIMARY KEY,
+        session_id    TEXT NOT NULL,
+        text          TEXT NOT NULL,
+        last_part_at  TEXT NOT NULL,
+        flushed_at    TEXT,
+        created_at    TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS voice_buffers_open
+        ON voice_buffers(session_id) WHERE flushed_at IS NULL;
+    """,
 ]
 
 

@@ -17,8 +17,13 @@ from app.db.models import MIGRATIONS, Mode, Role, Session, Status
 
 
 def _now() -> str:
-    """Get current time as ISO 8601 text in UTC."""
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    """Get current time as ISO 8601 text in UTC, to the microsecond.
+
+    The width is fixed, so `<` and `<=` on the text are the same on the time.
+    The voice buffer needs that: it measures a silence of a few seconds, and
+    it compares `last_part_at` in SQL.
+    """
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 @contextmanager
@@ -222,3 +227,59 @@ def get_turns(session_id: str) -> list[dict[str, str]]:
             (session_id,),
         ).fetchall()
         return [{"role": row["role"], "text": row["text"]} for row in rows]
+
+
+def add_voice_part(session_id: str, text: str) -> int | None:
+    """Add one transcript utterance to the open buffer of a session.
+
+    Give the id of the buffer. One `transcript.data` event is one utterance and
+    not one turn, so the parts wait here until a silence ends the turn.
+    """
+    with connect() as connection:
+        row = connection.execute(
+            """
+            INSERT INTO voice_buffers (session_id, text, last_part_at, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_id) WHERE flushed_at IS NULL
+            DO UPDATE SET text = voice_buffers.text || ' ' || excluded.text,
+                          last_part_at = excluded.last_part_at
+            RETURNING id
+            """,
+            (session_id, text, _now(), _now()),
+        ).fetchone()
+        return int(row["id"]) if row is not None else None
+
+
+def claim_voice_buffer(session_id: str, not_after: str) -> tuple[int, str] | None:
+    """Close the open buffer of a session and give its id and its words.
+
+    `not_after` is the newest `last_part_at` that still counts as silence. A
+    part that arrived after it means that the patient is still speaking, and
+    the buffer stays open for a later wake-up.
+    """
+    with connect() as connection:
+        row = connection.execute(
+            """
+            UPDATE voice_buffers
+               SET flushed_at = ?
+             WHERE session_id = ?
+               AND flushed_at IS NULL
+               AND last_part_at <= ?
+            RETURNING id, text
+            """,
+            (_now(), session_id, not_after),
+        ).fetchone()
+        return (int(row["id"]), row["text"]) if row is not None else None
+
+
+def open_voice_buffer(session_id: str) -> tuple[int, str] | None:
+    """Give the open buffer of a session, or None."""
+    with connect() as connection:
+        row = connection.execute(
+            """
+            SELECT id, text FROM voice_buffers
+             WHERE session_id = ? AND flushed_at IS NULL
+            """,
+            (session_id,),
+        ).fetchone()
+        return (int(row["id"]), row["text"]) if row is not None else None

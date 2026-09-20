@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from app.db.models import Mode
 from app.modes.chat import ChatMode
+from app.modes.voice import VoiceMode
 
 
 class ModeError(Exception):
@@ -37,11 +38,17 @@ class TurnMode(Protocol):
         """
 
 
-# The consent notice, sent one time when the bot is in the call
+# The consent notice, sent one time when the bot is in the call.
 CONSENT_NOTICE = (
     "Hello. I am an AI intake assistant, not a physician. "
     "I ask a few questions about your headaches before your visit, and your "
     "answers go into a summary for your clinician. Please answer in the chat."
+)
+
+CONSENT_NOTICE_VOICE = (
+    "Hello. I am an AI intake assistant, not a physician. "
+    "I ask a few questions about your headaches before your visit, and your "
+    "answers go into a summary for your clinician. Please answer out loud."
 )
 
 # The last message of the intake. It is mode-neutral: voice mode says the same
@@ -51,9 +58,13 @@ CLOSING_MESSAGE = (
     "A clinician reads it before your visit."
 )
 
-# Section 6 of docs/TASKS.md puts `voice` here. `ChatMode` holds no state, so
-# one instance for the process is correct: the state is in the database.
-MODES: dict[Mode, TurnMode] = {"chat": ChatMode()}
+MODES: dict[Mode, TurnMode] = {"chat": ChatMode(), "voice": VoiceMode()}
+
+# The notice of each mode. The route reads it with the mode of the session
+CONSENT_NOTICES: dict[Mode, str] = {
+    "chat": CONSENT_NOTICE,
+    "voice": CONSENT_NOTICE_VOICE,
+}
 
 
 def get_mode(mode: Mode) -> TurnMode:

@@ -8,6 +8,7 @@ chat messages and the transcript. The event sets do not intersect.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
@@ -16,8 +17,15 @@ from app.config import settings
 from app.db import session_store
 from app.db.models import Session, Status
 from app.engine import loop
-from app.modes.base import CLOSING_MESSAGE, CONSENT_NOTICE, ModeError, TurnMode, get_mode
+from app.modes.base import (
+    CLOSING_MESSAGE,
+    CONSENT_NOTICES,
+    ModeError,
+    TurnMode,
+    get_mode,
+)
 from app.modes.chat import CHAT_EVENT
+from app.modes.voice import TRANSCRIPT_EVENT, VoiceTurnGap
 from app.recall import client as recall_client
 from app.recall import events as recall_events
 from app.recall.client import RecallError
@@ -45,9 +53,6 @@ BOT_EVENT_STATUS: dict[str, Status] = {
 
 # The events that carry a reason for the `error_reason` column.
 ERROR_EVENTS = {"bot.fatal", "bot.recording_permission_denied"}
-
-# The real-time events. `transcript.data` gets its logic in section 6.
-REALTIME_EVENTS = {CHAT_EVENT, "transcript.data"}
 
 
 @router.post("/recall")
@@ -82,9 +87,8 @@ def handle_event(event: RecallEvent) -> None:
         _run_chat_turn(event)
         return
 
-    if event.name in REALTIME_EVENTS:
-        # The voice loop is section 6 of docs/TASKS.md.
-        logger.info("real-time event %s for bot %s", event.name, event.bot_id)
+    if event.name == TRANSCRIPT_EVENT:
+        _run_voice_turn(event)
         return
 
     if event.name not in BOT_EVENT_STATUS and event.name != "bot.call_ended":
@@ -120,7 +124,7 @@ def handle_event(event: RecallEvent) -> None:
         # The bot is in the call. The notice goes out first, then the first
         # question. `apply_bot_event` gave True, so a repeated event does not
         # arrive here and the notice goes out one time.
-        _start_chat_intake(session)
+        _start_intake(session)
 
 
 def _session_of(event: RecallEvent) -> Session | None:
@@ -137,17 +141,24 @@ def _session_of(event: RecallEvent) -> Session | None:
     return session
 
 
-def _start_chat_intake(session: Session) -> None:
-    """Send the consent notice, then ask the first question."""
+def _mode_of(session: Session) -> TurnMode | None:
+    """Give the implementation of the mode of a session, or None."""
     try:
-        mode = get_mode(session.mode)
+        return get_mode(session.mode)
     except ModeError as error:
         logger.warning("session %s has no mode: %s", session.id, error)
         session_store.set_status(session.id, "error", str(error))
+        return None
+
+
+def _start_intake(session: Session) -> None:
+    """Give the consent notice, then ask the first question."""
+    mode = _mode_of(session)
+    if mode is None:
         return
 
     try:
-        mode.send_notice(session.id, CONSENT_NOTICE)
+        mode.send_notice(session.id, CONSENT_NOTICES[session.mode])
     except ModeError as error:
         # The notice is not the intake. If the meeting refuses it, the first
         # question fails in the same manner, and `engine/loop.py` writes the
@@ -163,11 +174,8 @@ def _run_chat_turn(event: RecallEvent) -> None:
     if session is None:
         return
 
-    try:
-        mode = get_mode(session.mode)
-    except ModeError as error:
-        logger.warning("session %s has no mode: %s", session.id, error)
-        session_store.set_status(session.id, "error", str(error))
+    mode = _mode_of(session)
+    if mode is None:
         return
 
     text = mode.handle_incoming_turn(session.id, event)
@@ -183,6 +191,58 @@ def _run_chat_turn(event: RecallEvent) -> None:
         # after the intake ended must not send the closing line again, and it
         # must not take the bot out of the call a second time.
         _finish_intake(session.id, mode)
+
+
+def _run_voice_turn(event: RecallEvent) -> None:
+    """Take one transcript utterance into the buffer, and arm the silence."""
+    session = _session_of(event)
+    if session is None:
+        return
+
+    mode = _mode_of(session)
+    if mode is None:
+        return
+
+    mode.handle_incoming_turn(session.id, event)
+
+    if session_store.open_voice_buffer(session.id) is None:
+        # A chat session also receives the transcript
+        return
+
+    _arm_voice_flush(session.id)
+
+
+def _arm_voice_flush(session_id: str) -> None:
+    """Wake up after the silence, and end the patient turn."""
+    timer = threading.Timer(
+        settings.VOICE_TURN_GAP_SECONDS, flush_voice_turn, args=(session_id,)
+    )
+    timer.daemon = True
+    timer.start()
+
+
+def flush_voice_turn(session_id: str) -> None:
+    """End one patient turn, if the patient stopped speaking."""
+    session = session_store.get_session(session_id)
+    if session is None:
+        logger.warning("no session has id %s, no turn", session_id)
+        return
+
+    mode = _mode_of(session)
+    if mode is None:
+        return
+
+    gap = VoiceTurnGap(session_id=session_id)
+    text = mode.handle_incoming_turn(session_id, gap)
+    if text is None:
+        # A part arrived after this wake-up started, or another wake-up took
+        # the buffer. The part that arrived armed its own wake-up.
+        return
+
+    loop.run_turn(session_id, text, gap.event_id)
+
+    if session.status != "complete":
+        _finish_intake(session_id, mode)
 
 
 def _finish_intake(session_id: str, mode: TurnMode) -> None:

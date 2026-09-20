@@ -5,6 +5,7 @@ Bot schema v1.11.
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Any
 
@@ -36,6 +37,19 @@ CONSENT_NOTICE = (
     "Hello. I am an AI intake assistant, not a physician. "
     "I ask a few questions about your headaches before your visit, and your "
     "answers go into a summary for your clinician. Please answer in the chat."
+)
+
+# 0.29 seconds of silence, mp3, base64. The output audio endpoint operates only
+# if the bot was made with an `automatic_audio_output` configuration, and this
+# build makes the bot speak from the endpoint and not on a schedule. Recall
+# gives this answer. See docs/API_CONTRACT.md.
+SILENT_MP3_B64 = (
+    "/+MYxAAAAANIAAAAAExBTUUzLjEwMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"
+    "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV/+MYxDsAAANIAAAAAFVVVVVVVVVVVVVVVVVV"
+    "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV/+MYxHYAAANI"
+    "AAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"
+    "VVVVVVVVVVVVVVVV/+MYxLEAAANIAAAAAFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"
+    "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV"
 )
 
 
@@ -92,9 +106,11 @@ def _recording_config() -> dict[str, Any]:
     }
 
 
-def build_request_body(meeting_url: str, session_id: str) -> dict[str, Any]:
+def build_request_body(
+    meeting_url: str, session_id: str, mode: Mode = "chat"
+) -> dict[str, Any]:
     """Give the body of the create-bot request."""
-    return {
+    body: dict[str, Any] = {
         "meeting_url": meeting_url,
         "bot_name": settings.RECALL_BOT_NAME,
         # Recall shows the metadata in the dashboard and in the bot logs, which makes a failed bot easy to find.
@@ -105,13 +121,22 @@ def build_request_body(meeting_url: str, session_id: str) -> dict[str, Any]:
         "recording_config": _recording_config(),
     }
 
+    if mode == "voice":
+        # `send_output_audio` gives HTTP 400 without this. The silence is what
+        # the bot plays on its own, and the endpoint says each question.
+        body["automatic_audio_output"] = {
+            "in_call_recording": {"data": {"kind": "mp3", "b64_data": SILENT_MP3_B64}}
+        }
+
+    return body
+
 
 def create_bot(meeting_url: str, session_id: str, mode: Mode = "chat") -> str:
     """Make a Recall bot for a meeting. Give the bot id.
 
     Raise `RecallError` with a short reason for each failure.
     """
-    response = _post("/api/v1/bot/", build_request_body(meeting_url, session_id))
+    response = _post("/api/v1/bot/", build_request_body(meeting_url, session_id, mode))
 
     try:
         bot_id = response.json()["id"]
@@ -145,3 +170,12 @@ def leave_call(bot_id: str) -> None:
     """
     _post(f"/api/v1/bot/{bot_id}/leave_call/", {})
     logger.info("bot %s left the call", bot_id)
+
+
+def send_output_audio(bot_id: str, audio: bytes) -> None:
+    """Play one mp3 into the meeting of a bot."""
+    body = {"kind": "mp3", "b64_data": base64.b64encode(audio).decode("ascii")}
+
+    _post(f"/api/v1/bot/{bot_id}/output_audio/", body)
+
+    logger.info("sent %s bytes of audio to bot %s", len(audio), bot_id)

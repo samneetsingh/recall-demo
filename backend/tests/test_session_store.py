@@ -227,3 +227,116 @@ def test_two_appends_at_the_same_time_give_one_turn_and_no_loss() -> None:
     log = session_store.get_turns(session.id)
     assert len(log) == 1
     assert log[0]["text"] in {"one", "two"}
+
+
+# The voice buffer. One `transcript.data` utterance is one part, and a silence
+# ends the turn. See ../app/modes/voice.py.
+
+FAR_FUTURE = "2099-01-01T00:00:00.000000+00:00"
+LONG_PAST = "2000-01-01T00:00:00.000000+00:00"
+
+
+def test_the_first_part_opens_a_buffer() -> None:
+    session = session_store.create_session(MEETING_URL, mode="voice")
+
+    buffer_id = session_store.add_voice_part(session.id, "I get")
+
+    assert buffer_id is not None
+    assert session_store.open_voice_buffer(session.id) == (buffer_id, "I get")
+
+
+def test_a_second_part_joins_the_open_buffer() -> None:
+    session = session_store.create_session(MEETING_URL, mode="voice")
+
+    first = session_store.add_voice_part(session.id, "I get")
+    second = session_store.add_voice_part(session.id, "bad headaches")
+
+    assert first == second
+    assert session_store.open_voice_buffer(session.id) == (first, "I get bad headaches")
+
+
+def test_the_claim_gives_the_words_and_closes_the_buffer() -> None:
+    session = session_store.create_session(MEETING_URL, mode="voice")
+    buffer_id = session_store.add_voice_part(session.id, "I get bad headaches")
+
+    assert session_store.claim_voice_buffer(session.id, FAR_FUTURE) == (
+        buffer_id,
+        "I get bad headaches",
+    )
+    assert session_store.open_voice_buffer(session.id) is None
+
+
+def test_a_second_claim_gives_nothing() -> None:
+    """A wake-up is not cancelled, so two can fire for one buffer."""
+    session = session_store.create_session(MEETING_URL, mode="voice")
+    session_store.add_voice_part(session.id, "I get bad headaches")
+    session_store.claim_voice_buffer(session.id, FAR_FUTURE)
+
+    assert session_store.claim_voice_buffer(session.id, FAR_FUTURE) is None
+
+
+def test_a_claim_that_is_too_early_keeps_the_buffer() -> None:
+    """A part arrived after the wake-up started. The patient still speaks."""
+    session = session_store.create_session(MEETING_URL, mode="voice")
+    session_store.add_voice_part(session.id, "I get")
+
+    assert session_store.claim_voice_buffer(session.id, LONG_PAST) is None
+    assert session_store.open_voice_buffer(session.id) is not None
+
+
+def test_a_claim_with_no_buffer_gives_nothing() -> None:
+    session = session_store.create_session(MEETING_URL, mode="voice")
+
+    assert session_store.claim_voice_buffer(session.id, FAR_FUTURE) is None
+
+
+def test_a_part_after_a_claim_opens_a_new_buffer() -> None:
+    session = session_store.create_session(MEETING_URL, mode="voice")
+    first = session_store.add_voice_part(session.id, "I get")
+    session_store.claim_voice_buffer(session.id, FAR_FUTURE)
+
+    second = session_store.add_voice_part(session.id, "two weeks")
+
+    assert second != first
+    assert session_store.open_voice_buffer(session.id) == (second, "two weeks")
+
+
+def test_two_sessions_keep_their_own_buffers() -> None:
+    one = session_store.create_session(MEETING_URL, mode="voice")
+    two = session_store.create_session(MEETING_URL, mode="voice")
+
+    session_store.add_voice_part(one.id, "I get")
+    session_store.add_voice_part(two.id, "two weeks")
+
+    assert session_store.open_voice_buffer(one.id) is not None
+    assert session_store.open_voice_buffer(one.id)[1] == "I get"
+    assert session_store.open_voice_buffer(two.id)[1] == "two weeks"
+
+
+def test_two_claims_at_the_same_time_give_one_turn() -> None:
+    """Two wake-ups must not make two turns of one answer.
+
+    The claim is one UPDATE with its condition in the same statement, which is
+    the rule that `apply_bot_event` uses. This test is the reason it is not a
+    read and then a write.
+    """
+    session = session_store.create_session(MEETING_URL, mode="voice")
+    session_store.add_voice_part(session.id, "I get bad headaches")
+    start = threading.Barrier(2)
+    claimed: list[tuple[int, str] | None] = []
+    lock = threading.Lock()
+
+    def claim() -> None:
+        start.wait(timeout=5)
+        result = session_store.claim_voice_buffer(session.id, FAR_FUTURE)
+        with lock:
+            claimed.append(result)
+
+    threads = [threading.Thread(target=claim) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert len([one for one in claimed if one is not None]) == 1
+    assert claimed.count(None) == 1

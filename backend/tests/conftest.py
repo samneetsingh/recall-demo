@@ -114,3 +114,47 @@ def chat_payload(
             "bot": {"id": bot_id, "metadata": {"session_id": "s1"}},
         },
     }
+
+
+def transcript_payload(
+    text: str = "I get bad headaches",
+    speaker: str | None = "Samneet Singh",
+    bot_id: str = "bot-abc",
+    start: float = 10.0,
+) -> dict[str, Any]:
+    """Give the true shape of a `transcript.data` event.
+
+    The shape is from the Recall document `real-time-event-payloads`, which
+    renders it from a component; `agent-quickstarts` gives the same schema as
+    text. **There is no sentence field.** The words are at `data.data.words`,
+    each with its own `text`, and the speaker is at `data.data.participant`.
+    """
+    words = text.split()
+    return {
+        "event": "transcript.data",
+        "data": {
+            "data": {
+                "words": [
+                    {
+                        "text": word,
+                        "start_timestamp": {"relative": start + index * 0.4},
+                        "end_timestamp": {"relative": start + index * 0.4 + 0.3},
+                    }
+                    for index, word in enumerate(words)
+                ],
+                "language_code": "en",
+                "participant": {
+                    "id": 100,
+                    "name": speaker,
+                    "is_host": True,
+                    "platform": "desktop",
+                    "extra_data": {"google_meet": {"static_participant_id": "abc="}},
+                    "email": None,
+                },
+            },
+            "realtime_endpoint": {"id": "b8ed2ca2", "metadata": {}},
+            "transcript": {"id": "tr-1", "metadata": {}},
+            "recording": {"id": "6c1cb39d", "metadata": {}},
+            "bot": {"id": bot_id, "metadata": {"session_id": "s1"}},
+        },
+    }

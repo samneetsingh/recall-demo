@@ -82,7 +82,7 @@ def test_a_new_file_gets_the_newest_version(db_path: Path) -> None:
     assert session_store.schema_version() == NEWEST_VERSION
     assert "last_event_at" in _columns(db_path)
     assert "transcript" not in _columns(db_path)
-    assert _tables(db_path) >= {"sessions", "turns"}
+    assert _tables(db_path) >= {"sessions", "turns", "voice_buffers"}
 
 
 def test_an_old_file_gets_the_column_and_keeps_its_rows(db_path: Path) -> None:
@@ -154,3 +154,28 @@ def test_an_old_file_takes_every_migration_in_one_call(db_path: Path) -> None:
 def test_the_first_migration_is_the_create_table(db_path: Path) -> None:
     """A file at version 0 already has the table, so entry 1 must not fail."""
     assert "CREATE TABLE IF NOT EXISTS sessions" in models.MIGRATIONS[0]
+
+
+def test_an_old_file_gets_the_voice_buffer_table(db_path: Path) -> None:
+    """A file on the homelab volume is at version 5. Migration 6 adds this."""
+    _old_file(db_path)
+
+    session_store.init_db()
+
+    assert "voice_buffers" in _tables(db_path)
+
+
+def test_one_session_has_one_open_buffer(db_path: Path) -> None:
+    """The partial unique index is what holds this rule, not the code."""
+    session_store.init_db()
+    session = session_store.create_session("https://meet.google.com/abc-defg-hij")
+
+    session_store.add_voice_part(session.id, "I get")
+    session_store.add_voice_part(session.id, "bad headaches")
+
+    connection = sqlite3.connect(db_path)
+    open_rows = connection.execute(
+        "SELECT COUNT(*) FROM voice_buffers WHERE flushed_at IS NULL"
+    ).fetchone()[0]
+    connection.close()
+    assert open_rows == 1

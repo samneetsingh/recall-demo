@@ -2,6 +2,7 @@
 
 import itertools
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,15 +10,20 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.db import session_store
 from app.engine import intake, prompts, summary as summary_engine
-from app.modes.base import CLOSING_MESSAGE, CONSENT_NOTICE
+from app.modes.base import CLOSING_MESSAGE, CONSENT_NOTICE, CONSENT_NOTICE_VOICE
 from app.recall import client as recall_client
 from app.recall.client import RecallError
-from tests.conftest import chat_payload, signed_headers
+from app.routes import webhooks
+from app.tts import openai_tts
+from tests.conftest import chat_payload, signed_headers, transcript_payload
 
 BOT_ID = "bot-abc"
 MEETING_URL = "https://meet.google.com/abc-defg-hij"
 
 SUMMARY_ANSWER = {field: f"the {field}" for field in prompts.SUMMARY_FIELDS}
+
+# The real wake-up, bound at import, before the `offline` fixture replaces it.
+REAL_ARM = webhooks._arm_voice_flush
 
 
 @pytest.fixture
@@ -47,12 +53,33 @@ def left() -> list[str]:
     return []
 
 
+@pytest.fixture
+def spoken() -> list[str]:
+    """The texts that went to TTS, in order. Voice mode says these."""
+    return []
+
+
+@pytest.fixture
+def played() -> list[bytes]:
+    """The audio that went to the output audio endpoint of a bot."""
+    return []
+
+
+@pytest.fixture
+def armed() -> list[str]:
+    """The sessions that got a silence wake-up."""
+    return []
+
+
 @pytest.fixture(autouse=True)
 def offline(
     monkeypatch: pytest.MonkeyPatch,
     sent: list[str],
     pinned: list[str],
     left: list[str],
+    spoken: list[str],
+    played: list[bytes],
+    armed: list[str],
 ) -> None:
     """No test in this file calls OpenAI or Recall.
 
@@ -61,6 +88,10 @@ def offline(
     Section 5a added a third caller, `leave_call`, which is a fake for the same
     reason: a route that gains a caller takes a test file back on to the
     network.
+
+    Section 6 adds two more callers, `openai_tts.speak` and
+    `send_output_audio`. **They are fakes here before the route calls them.**
+    This is lesson 3 of ../../tasks/lessons.md.
     """
     asked = {"count": 0}
 
@@ -89,6 +120,27 @@ def offline(
         left.append(bot_id)
 
     monkeypatch.setattr(recall_client, "leave_call", fake_leave)
+
+    def fake_speak(text: str) -> bytes:
+        spoken.append(text)
+        return b"fake-mp3-bytes"
+
+    monkeypatch.setattr(openai_tts, "speak", fake_speak)
+
+    def fake_output_audio(bot_id: str, audio: bytes) -> None:
+        played.append(audio)
+
+    monkeypatch.setattr(recall_client, "send_output_audio", fake_output_audio)
+
+    def fake_arm(session_id: str) -> None:
+        armed.append(session_id)
+
+    # The real wake-up is a thread that fires 2.5 seconds later, which is after
+    # the test deleted its database file. The tests call `flush_voice_turn`
+    # themselves, and one test puts the real wake-up back.
+    monkeypatch.setattr(webhooks, "_arm_voice_flush", fake_arm)
+    # A gap of 0 makes each part old enough at once.
+    monkeypatch.setattr(settings, "VOICE_TURN_GAP_SECONDS", 0.0)
     # The real delay is 3 seconds, which each test in this file would wait.
     monkeypatch.setattr(settings, "BOT_LEAVE_DELAY_SECONDS", 0.0)
 
@@ -303,7 +355,7 @@ def test_an_unknown_bot_id_gives_200(client: TestClient, session_id: str) -> Non
 def test_a_realtime_event_gives_200_and_no_status_change(
     client: TestClient, session_id: str, name: str
 ) -> None:
-    """The chat loop and the voice loop are later tasks."""
+    """A payload with no text and no words makes no turn in either mode."""
     result = _post(client, {"event": name, "data": {"bot": {"id": BOT_ID}}})
 
     assert result.status_code == 200
@@ -591,21 +643,27 @@ def test_a_failed_closing_line_keeps_the_session_complete(
     assert session.summary == SUMMARY_ANSWER
 
 
-def test_a_session_in_voice_mode_gives_an_error_and_no_turn(
-    client: TestClient, sent: list[str]
+def test_a_chat_message_in_a_voice_session_makes_no_turn(
+    client: TestClient, sent: list[str], spoken: list[str]
 ) -> None:
-    """Voice mode has no implementation until section 6."""
+    """One session has one mode. Sam selected this.
+
+    A patient who types in a voice call gets no answer, and the container log
+    is the one place that says so.
+    """
     session = session_store.create_session(MEETING_URL, "voice")
     session_store.set_bot_id(session.id, "bot-voice")
     session_store.set_status(session.id, "in_progress")
 
-    _chat(client, "I get bad headaches", bot_id="bot-voice", message_id="msg_02")
+    result = _chat(client, "I get bad headaches", bot_id="bot-voice", message_id="msg_02")
 
+    assert result.status_code == 200
     after = session_store.get_session(session.id)
     assert after is not None
-    assert after.status == "error"
-    assert "no implementation" in (after.error_reason or "")
+    assert after.status == "in_progress"
+    assert session_store.get_turns(session.id) == []
     assert sent == []
+    assert spoken == []
 
 
 def test_a_message_after_the_intake_sends_no_second_closing_line(
@@ -811,3 +869,285 @@ def test_the_leave_waits_before_it_calls_recall(
     monkeypatch.setattr(settings, "BOT_LEAVE_DELAY_SECONDS", 3.0)
     webhooks._leave_call(session)
     assert waited == [3.0]
+
+
+# Voice mode. Section 6 of ../../docs/TASKS.md.
+#
+# `transcript.data` is a finalized utterance and it is not a turn: a patient
+# answers in parts. The parts wait in the `voice_buffers` table, and a silence
+# of VOICE_TURN_GAP_SECONDS ends the turn. The tests call `flush_voice_turn`
+# in place of the wake-up thread, and one test puts the real wake-up back.
+
+VOICE_BOT_ID = "bot-voice"
+
+
+@pytest.fixture
+def voice_session_id() -> str:
+    """A voice session with a bot id, the state after `POST /sessions`."""
+    session = session_store.create_session(MEETING_URL, "voice")
+    session_store.set_bot_id(session.id, VOICE_BOT_ID)
+    session_store.set_status(session.id, "waiting_for_bot")
+    return session.id
+
+
+def _utterance(
+    client: TestClient,
+    text: str = "I get bad headaches",
+    speaker: str = "Samneet Singh",
+    bot_id: str = VOICE_BOT_ID,
+    message_id: str = "msg_test_00000001",
+):
+    """Send one signed transcript utterance, in the true shape of the event."""
+    return _post(
+        client, transcript_payload(text, speaker, bot_id), message_id=message_id
+    )
+
+
+def test_the_voice_notice_is_spoken_and_not_pinned(
+    client: TestClient, voice_session_id: str, spoken: list[str], pinned: list[str]
+) -> None:
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+
+    assert spoken == [CONSENT_NOTICE_VOICE, "question 1"]
+    assert pinned == []
+
+
+def test_the_voice_notice_does_not_say_the_chat(
+    client: TestClient, voice_session_id: str, spoken: list[str]
+) -> None:
+    """The last sentence of the notice says where to answer."""
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+
+    assert spoken[0].endswith("Please answer out loud.")
+
+
+def test_the_chat_notice_did_not_change(
+    client: TestClient, session_id: str, sent: list[str], pinned: list[str]
+) -> None:
+    """Voice mode is an addition. Chat mode must give the same result."""
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    assert sent == [CONSENT_NOTICE, "question 1"]
+    assert pinned == [CONSENT_NOTICE]
+
+
+def test_the_first_question_is_played_as_audio(
+    client: TestClient, voice_session_id: str, played: list[bytes]
+) -> None:
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+
+    assert played == [b"fake-mp3-bytes", b"fake-mp3-bytes"]
+
+
+def test_one_utterance_makes_no_turn(
+    client: TestClient, voice_session_id: str, armed: list[str], spoken: list[str]
+) -> None:
+    """An utterance is not a turn. It goes in the buffer and arms the silence."""
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+    spoken.clear()
+
+    result = _utterance(client, "I get")
+
+    assert result.status_code == 200
+    assert session_store.get_turns(voice_session_id) == [
+        {"role": "bot", "text": "question 1"}
+    ]
+    assert armed == [voice_session_id]
+    assert spoken == []
+
+
+def test_three_utterances_and_a_silence_make_one_turn(
+    client: TestClient, voice_session_id: str, spoken: list[str]
+) -> None:
+    """The patient answers in three parts. The engine gets one answer."""
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+    spoken.clear()
+
+    _utterance(client, "I get", message_id="msg_02")
+    _utterance(client, "bad headaches", message_id="msg_03")
+    _utterance(client, "most mornings", message_id="msg_04")
+    webhooks.flush_voice_turn(voice_session_id)
+
+    assert session_store.get_turns(voice_session_id) == [
+        {"role": "bot", "text": "question 1"},
+        {"role": "patient", "text": "I get bad headaches most mornings"},
+        {"role": "bot", "text": "question 2"},
+    ]
+    assert spoken == ["question 2"]
+
+
+def test_the_event_id_of_a_voice_turn_is_the_buffer_id(
+    client: TestClient, voice_session_id: str
+) -> None:
+    """A turn is made of many events, so no Svix id names it. The row does."""
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+    _utterance(client, "I get bad headaches", message_id="msg_02")
+
+    webhooks.flush_voice_turn(voice_session_id)
+
+    with session_store.connect() as connection:
+        rows = connection.execute(
+            "SELECT role, event_id FROM turns WHERE session_id = ? ORDER BY id",
+            (voice_session_id,),
+        ).fetchall()
+    assert [(row["role"], row["event_id"]) for row in rows] == [
+        ("bot", None),
+        ("patient", "voice-1"),
+        ("bot", None),
+    ]
+
+
+def test_a_second_silence_makes_no_second_turn(
+    client: TestClient, voice_session_id: str
+) -> None:
+    """A wake-up is not cancelled, so two can fire for one buffer."""
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+    _utterance(client, "I get bad headaches", message_id="msg_02")
+    webhooks.flush_voice_turn(voice_session_id)
+
+    webhooks.flush_voice_turn(voice_session_id)
+
+    assert session_store.get_turns(voice_session_id) == [
+        {"role": "bot", "text": "question 1"},
+        {"role": "patient", "text": "I get bad headaches"},
+        {"role": "bot", "text": "question 2"},
+    ]
+
+
+def test_a_wake_up_that_is_too_early_makes_no_turn(
+    client: TestClient, voice_session_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A part arrived after the wake-up started. The patient still speaks."""
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+    _utterance(client, "I get", message_id="msg_02")
+    monkeypatch.setattr(settings, "VOICE_TURN_GAP_SECONDS", 30.0)
+
+    webhooks.flush_voice_turn(voice_session_id)
+
+    assert session_store.get_turns(voice_session_id) == [
+        {"role": "bot", "text": "question 1"}
+    ]
+    assert session_store.open_voice_buffer(voice_session_id) is not None
+
+
+def test_the_bot_does_not_answer_itself(
+    client: TestClient, voice_session_id: str, armed: list[str]
+) -> None:
+    """The bot plays its audio into the meeting, so Recall transcribes it."""
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+
+    _utterance(client, "question 1", speaker=settings.RECALL_BOT_NAME, message_id="msg_02")
+
+    assert armed == []
+    assert session_store.open_voice_buffer(voice_session_id) is None
+
+
+def test_a_transcript_in_a_chat_session_arms_nothing(
+    client: TestClient, session_id: str, armed: list[str]
+) -> None:
+    """One `realtime_endpoints` list carries both events, so a chat bot gets these."""
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    _utterance(client, "I get bad headaches", bot_id=BOT_ID, message_id="msg_02")
+
+    assert armed == []
+    assert session_store.open_voice_buffer(session_id) is None
+
+
+def test_a_transcript_for_a_bot_that_no_session_holds_gives_200(
+    client: TestClient, voice_session_id: str, armed: list[str]
+) -> None:
+    result = _utterance(client, "I get", bot_id="bot-other")
+
+    assert result.status_code == 200
+    assert armed == []
+
+
+def test_a_whole_voice_intake_says_the_closing_line_and_leaves(
+    client: TestClient,
+    voice_session_id: str,
+    spoken: list[str],
+    left: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+    _utterance(client, "I get bad headaches", message_id="msg_02")
+    _complete_on_the_next_call(monkeypatch)
+
+    webhooks.flush_voice_turn(voice_session_id)
+
+    session = session_store.get_session(voice_session_id)
+    assert session is not None
+    assert session.status == "complete"
+    assert session.summary == SUMMARY_ANSWER
+    assert spoken == [CONSENT_NOTICE_VOICE, "question 1", CLOSING_MESSAGE]
+    assert left == [VOICE_BOT_ID]
+
+
+def test_a_voice_turn_after_the_intake_makes_no_second_closing_line(
+    client: TestClient,
+    voice_session_id: str,
+    spoken: list[str],
+    left: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+    _utterance(client, "I get bad headaches", message_id="msg_02")
+    _complete_on_the_next_call(monkeypatch)
+    webhooks.flush_voice_turn(voice_session_id)
+
+    _utterance(client, "one more thing", message_id="msg_03")
+    webhooks.flush_voice_turn(voice_session_id)
+
+    assert spoken.count(CLOSING_MESSAGE) == 1
+    assert left == [VOICE_BOT_ID]
+
+
+def test_a_flush_for_a_session_that_is_gone_does_nothing(
+    client: TestClient, spoken: list[str]
+) -> None:
+    webhooks.flush_voice_turn("no-such-session")
+
+    assert spoken == []
+
+
+def test_a_failed_tts_puts_the_session_in_error(
+    client: TestClient, voice_session_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A question that nothing said must not leave the session `in_progress`."""
+
+    def fail(text: str) -> bytes:
+        raise openai_tts.TTSError("openai tts failed: no key")
+
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+    monkeypatch.setattr(openai_tts, "speak", fail)
+    _utterance(client, "I get bad headaches", message_id="msg_02")
+
+    webhooks.flush_voice_turn(voice_session_id)
+
+    session = session_store.get_session(voice_session_id)
+    assert session is not None
+    assert session.status == "error"
+    assert "openai tts failed" in (session.error_reason or "")
+
+
+def test_the_wake_up_ends_the_turn_by_itself(
+    client: TestClient, voice_session_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real thread, with a gap of 0. Each other test calls the flush."""
+    monkeypatch.setattr(webhooks, "_arm_voice_flush", REAL_ARM)
+    _post(client, _bot_event("bot.in_call_recording", bot_id=VOICE_BOT_ID))
+
+    _utterance(client, "I get bad headaches", message_id="msg_02")
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if len(session_store.get_turns(voice_session_id)) >= 3:
+            break
+        time.sleep(0.02)
+
+    assert session_store.get_turns(voice_session_id) == [
+        {"role": "bot", "text": "question 1"},
+        {"role": "patient", "text": "I get bad headaches"},
+        {"role": "bot", "text": "question 2"},
+    ]

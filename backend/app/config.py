@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_TIMEOUT_SECONDS: float = 30.0
 
+    # Text-to-speech settings
+    OPENAI_TTS_MODEL: str = "gpt-4o-mini-tts"
+    OPENAI_TTS_VOICE: str = "alloy"
+    OPENAI_TTS_INSTRUCTIONS: str = (
+        "Speak in a calm, clear and unhurried voice. You are a clinical triage assistant who speaks to a patient who has a headache."
+    )
+
+    # Voice mode: the length of silence that triggers the end of a turn
+    VOICE_TURN_GAP_SECONDS: float = 2.5
+
     # The limit of questions in one intake. The engine applies it, not the model
     INTAKE_MAX_TURNS: int = 6
 

@@ -155,8 +155,10 @@ def test_a_model_failure_puts_the_session_in_error(
 def test_a_mode_with_no_implementation_puts_the_session_in_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Section 5 put chat in the registry. Voice is not in it until section 6.
+    # Section 5 put chat in the registry and section 6 put voice in it. The
+    # entry goes out here, because the rule is about a mode that is absent.
     _script(monkeypatch)
+    monkeypatch.delitem(MODES, "voice")
     session = session_store.create_session(MEETING_URL, "voice")
     session_store.set_status(session.id, "in_progress")
 
