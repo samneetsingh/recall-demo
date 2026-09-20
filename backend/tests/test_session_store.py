@@ -82,3 +82,32 @@ def test_a_write_to_an_unknown_id_gives_none() -> None:
     assert session_store.set_status("no-such-id", "complete") is None
     assert session_store.set_summary("no-such-id", {}) is None
     assert session_store.append_turn("no-such-id", "bot", "hello") is None
+
+
+def test_set_bot_id_writes_the_column() -> None:
+    session = session_store.create_session(MEETING_URL)
+
+    updated = session_store.set_bot_id(session.id, "bot-77")
+
+    assert updated is not None
+    assert updated.bot_id == "bot-77"
+
+
+def test_get_session_by_bot_id_finds_the_row() -> None:
+    session = session_store.create_session(MEETING_URL)
+    session_store.set_bot_id(session.id, "bot-88")
+
+    found = session_store.get_session_by_bot_id("bot-88")
+
+    assert found is not None
+    assert found.id == session.id
+
+
+def test_get_session_by_bot_id_gives_none_for_an_unknown_bot() -> None:
+    assert session_store.get_session_by_bot_id("bot-not-here") is None
+
+
+def test_a_new_session_has_no_bot_id() -> None:
+    session = session_store.create_session(MEETING_URL)
+
+    assert session.bot_id is None

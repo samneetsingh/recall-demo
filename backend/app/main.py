@@ -5,6 +5,7 @@ infrastructure routes and the wiring. Business logic, SQL and
 configuration values should stay out of this file. 
 """
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -13,7 +14,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import CORS_HEADERS, CORS_METHODS, CORS_ORIGINS
 from app.db import session_store
-from app.routes import sessions
+from app.routes import sessions, webhooks
+
+
+# uvicorn configures its own loggers only. Without this line the root logger
+# stays at WARNING, and the webhook handler runs after the response with no
+# trace in the container log.
+logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager
@@ -39,9 +46,7 @@ app.add_middleware(
 )
 
 app.include_router(sessions.router)
-# The next task adds the webhook router here:
-#     from app.routes import webhooks
-#     app.include_router(webhooks.router)
+app.include_router(webhooks.router)
 
 
 @app.get("/")

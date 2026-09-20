@@ -19,13 +19,19 @@ Request body:
 
 `mode` is `"chat"` or `"voice"`.
 
+The route makes the session row, then makes the Recall bot.
+
 Response: HTTP 201.
 ```json
 {
   "session_id": "abc123",
-  "status": "creating_bot"
+  "status": "waiting_for_bot"
 }
 ```
+
+A bot that Recall refuses does not fail the request. The session row exists, so the
+result is HTTP 201 with the status `error`. Read the text of the failure from
+`GET /sessions/{session_id}`. The route does not give HTTP 500 for a Recall failure.
 
 ## GET /sessions/{session_id}
 
@@ -68,7 +74,31 @@ Response:
 ## POST /webhooks/recall
 
 Internal endpoint. Receives bot status, chat, and transcript events from Recall.ai.
-Verified against Recall's webhook signature. Not meant to be called directly.
+Not meant to be called directly.
+
+Each request must carry the headers `webhook-id`, `webhook-timestamp` and
+`webhook-signature`. The route verifies the signature against the workspace
+verification secret before it reads the body. A bad signature gives HTTP 401, and a
+body that is not an event gives HTTP 400. An empty `RECALL_WEBHOOK_SECRET` refuses
+every request.
+
+A verified request gives HTTP 200 and `{"ok": true}` immediately. The work runs after
+the response, because Recall sends the events in sequence and has a 15 second timeout.
+
+The map from a bot event to `status`:
+
+| Event | `status` | `error_reason` |
+|---|---|---|
+| `bot.joining_call`, `bot.in_waiting_room`, `bot.in_call_not_recording`, `bot.recording_permission_allowed` | `waiting_for_bot` | `null` |
+| `bot.in_call_recording` | `in_progress` | `null` |
+| `bot.recording_permission_denied`, `bot.fatal` | `error` | the `sub_code` |
+| `bot.call_ended` before the intake is complete | `error` | `call_ended:<sub_code>` |
+| `bot.call_ended` after the intake is complete | no change | no change |
+| `bot.done` | no change | no change |
+
+A status that is `complete` does not change. An event name that the backend does not
+know gives HTTP 200 and makes no change. The `sub_code` is a plain string, not an enum:
+Recall adds values without a notice.
 
 ## Extending this
 

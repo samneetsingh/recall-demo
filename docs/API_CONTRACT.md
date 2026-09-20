@@ -214,6 +214,36 @@ session that has no bot in the call.
 
 Method: `recall-ai` MCP, `get_doc` for `sub-codes` and `bot-status-change-events`.
 
+## The region
+
+**The workspace uses `us-west-2`, the pay-as-you-go region.** Sam gave this answer in
+session 05. The host is `https://us-west-2.recall.ai`, and the setting is
+`RECALL_API_BASE`. The API key is specific to the region: a key from another region
+gives HTTP 401 with the code `authentication_failed`, and the text of the answer names
+the four regions.
+
+## Webhook verification: how this build does it
+
+The scheme is HMAC-SHA256 over `webhook-id.webhook-timestamp.raw_body`. The key is the
+base64 body of the `whsec_...` secret. The signature header holds one or more
+`v1,<base64>` entries, because a secret rotation keeps the old secret active for 24
+hours.
+
+**This build uses the `svix` package.** Sam decided this in session 05.
+
+- `svix.webhooks.Webhook.verify` reads `webhook-id` or `svix-id`, and the same for the
+  timestamp and the signature. Recall sends the `webhook-*` names, so no header change
+  is necessary.
+- `svix` 2.5.0 gives `None` from `verify`. It calls `standardwebhooks` with
+  `json_parse=False`, so the caller must parse the body itself, after the check.
+- `standardwebhooks` refuses a timestamp that is more than 5 minutes old or 5 minutes in
+  the future. No extra check is necessary.
+- The headers come only after a workspace verification secret exists. Without the secret,
+  Recall sends no `webhook-*` header and no request can be verified.
+
+Method: `recall-ai` MCP, `get_doc` for `authenticating-requests-from-recallai`, and the
+installed source of `svix` and `standardwebhooks`.
+
 ## Webhook configuration: an open item
 
 `list_webhook_endpoints` on the `Sandbox` workspace gives an empty list. **No dashboard

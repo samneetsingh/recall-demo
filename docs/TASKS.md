@@ -20,13 +20,14 @@ works end to end.
       (adds the `pydantic-settings` dependency).
 - [x] Recall API key stored as an environment variable, never committed.
       `backend/.env` is not on the homelab server yet. Owner: Sam.
-- [~] Endpoint: create session (takes a meeting URL, creates a Recall bot).
-      The route makes the session row. It does not make a bot yet.
+- [x] Endpoint: create session (takes a meeting URL, creates a Recall bot).
 - [x] Endpoint: get session status.
 - [~] Endpoint: get session summary. The route and the 404 rule operate. The
       summary is stub data until the engine of section 3 writes a real one.
-- [ ] Webhook endpoint(s) for Recall bot status events, verified against Recall's
-      signature.
+- [x] Webhook endpoint(s) for Recall bot status events, verified against Recall's
+      signature. `POST /webhooks/recall` verifies with the workspace secret, then maps
+      the bot events to the session status. See `task-02-recall-connection/todo.md`.
+      Sam must still make the dashboard webhook endpoint, so no live event has arrived.
 
 ## 3. Mock intake engine
 

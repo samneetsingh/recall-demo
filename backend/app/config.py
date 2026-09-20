@@ -23,6 +23,17 @@ class Settings(BaseSettings):
     # The SQLite file. Default is the path in the container
     DB_PATH: Path = Path("/app/data/recall_demo.sqlite3")
 
+    # Recall.ai. The host is specific to the region of the API key
+    RECALL_API_BASE: str = "https://us-west-2.recall.ai"
+    RECALL_BOT_NAME: str = "Headache Assistant"
+    RECALL_TIMEOUT_SECONDS: float = 30.0
+
+    # The workspace verification secret, `whsec_...`. An empty value refuses every webhook request
+    RECALL_WEBHOOK_SECRET: str = ""
+
+    # Where Recall reaches this backend. Makes the realtime endpoint URL
+    PUBLIC_BASE_URL: str = "https://recall-api.ss-ubuntu-01.net"
+
     # Browser origins that can call this API
     CORS_ORIGINS: list[str] = [
         "https://recall.samneet.com",  # The deployed Cloudflare Worker.

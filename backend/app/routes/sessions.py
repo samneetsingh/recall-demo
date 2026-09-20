@@ -4,6 +4,7 @@ A handler reads the request, calls ``app.db.session_store`` and gives a
 response.
 """
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -11,6 +12,10 @@ from pydantic import BaseModel, HttpUrl
 
 from app.db import session_store
 from app.db.models import Mode, Session
+from app.recall import client as recall_client
+from app.recall.client import RecallError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -67,11 +72,26 @@ def _require_session(session_id: str) -> Session:
 
 @router.post("", status_code=201, response_model=CreateSessionResponse)
 def create_session(request: CreateSessionRequest) -> CreateSessionResponse:
-    """Make a new session for a meeting URL."""
+    """Make a new session for a meeting URL, and make the Recall bot.
+
+    A failed bot does not fail the request. The session row exists, so the
+    result is 201 with the status `error`, and the frontend reads the reason
+    from its poll of `GET /sessions/{id}`.
+    """
     session = session_store.create_session(str(request.meeting_url), request.mode)
-    # The next task calls `app/recall/client.py` here. It makes the bot, keeps
-    # the bot id on the session row, and sets the status to `waiting_for_bot`.
-    return CreateSessionResponse(session_id=session.id, status=session.status)
+
+    try:
+        bot_id = recall_client.create_bot(
+            str(request.meeting_url), session.id, request.mode
+        )
+    except RecallError as error:
+        logger.warning("session %s got no bot: %s", session.id, error)
+        session_store.set_status(session.id, "error", str(error))
+        return CreateSessionResponse(session_id=session.id, status="error")
+
+    session_store.set_bot_id(session.id, bot_id)
+    session_store.set_status(session.id, "waiting_for_bot")
+    return CreateSessionResponse(session_id=session.id, status="waiting_for_bot")
 
 
 @router.get("/{session_id}", response_model=SessionResponse)

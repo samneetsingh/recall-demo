@@ -6,11 +6,12 @@ python = "^3.13"
 fastapi = "^0.141.1"
 uvicorn = {extras = ["standard"], version = "^0.53.0"}
 pydantic-settings = "^2.15.0"
+svix = "^2.5.0"
+httpx = "^0.28.1"
 
 [dependency-groups]
 dev = [
-    "pytest (>=9.1.1,<10.0.0)",
-    "httpx (>=0.28.1,<0.29.0)"
+    "pytest (>=9.1.1,<10.0.0)"
 ]
 
 [tool.pytest.ini_options]

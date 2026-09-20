@@ -94,6 +94,30 @@ def set_status(
         return _fetch(connection, session_id)
 
 
+def set_bot_id(session_id: str, bot_id: str) -> Session | None:
+    """Keep the Recall bot id against a session."""
+    with connect() as connection:
+        connection.execute(
+            "UPDATE sessions SET bot_id = ?, updated_at = ? WHERE id = ?",
+            (bot_id, _now(), session_id),
+        )
+        return _fetch(connection, session_id)
+
+
+def get_session_by_bot_id(bot_id: str) -> Session | None:
+    """Give the session of a bot id, or None.
+
+    A Recall event carries the bot id and not the session id, so the webhook
+    route needs this direction.
+    """
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT * FROM sessions WHERE bot_id = ?",
+            (bot_id,),
+        ).fetchone()
+        return Session.from_row(row) if row is not None else None
+
+
 def set_summary(session_id: str, summary: dict[str, Any]) -> Session | None:
     """Write the structured summary of a session."""
     with connect() as connection:
