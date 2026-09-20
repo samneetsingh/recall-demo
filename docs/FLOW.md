@@ -227,6 +227,9 @@ sequenceDiagram
     end
     W->>MO: send_outgoing_turn(CLOSING_MESSAGE) if the status is now complete
     Note over W: The closing line is not a turn, so it is<br/>not in the log. loop.py does not send it.
+    W->>W: wait BOT_LEAVE_DELAY_SECONDS
+    W->>R: POST /api/v1/bot/{id}/leave_call/
+    Note over W,R: The bot takes itself out of the call.<br/>Irreversible. A failure is a log line only.
 ```
 
 **The first question.** `bot.in_call_recording` calls `_start_chat_intake`. That sends
@@ -239,6 +242,16 @@ in the live call of session 09.
 **Two messages of the bot are not turns:** the pinned notice and the closing line. A
 question that goes out in two parts is one turn and one row. The log holds what the engine said,
 one row for each question.
+
+**The bot leaves at the end.** `_finish_intake` says the closing line, waits
+`BOT_LEAVE_DELAY_SECONDS` (3 seconds), and then calls `leave_call`. The wait is the
+point: Recall answers HTTP 200 when it **accepts** the message, and the bot has still to
+type it into the meeting, so a leave with no wait can cut the line. The leave is
+irreversible, and a failure is a log line only, because the summary is already written.
+The leave is **not** on the mode boundary: it is one HTTP call to Recall and it is the
+same for chat and for voice. A session in `error` keeps its bot, because an error
+usually means that the bot takes no command. The event that the leave makes,
+`bot.call_ended`, changes nothing: `apply_bot_event` has `AND status != 'complete'`.
 
 ## 7. The status machine
 

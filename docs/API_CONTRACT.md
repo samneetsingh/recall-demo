@@ -75,6 +75,26 @@ The bot receives its own messages back, so the backend compares the sender name 
 create-bot request, it is not in the Webhooks console, and Recall retries it up to 60
 times, one each second. The signature is the same workspace secret.
 
+## Leave the call
+
+**`POST /api/v1/bot/{id}/leave_call/`**, with no body. It takes the bot out of the
+meeting. The result is HTTP 200 with the bot object, or HTTP 400 with no body. The limit
+is 300 requests each minute for one workspace. `get_doc` for `bot_leave_call_create`.
+
+**It is irreversible.** The bot cannot come back, and a new bot needs a new session.
+The backend calls it one time, after the closing line of a complete intake.
+
+**There is no endpoint that ends a meeting for all participants.** The bot is an
+ordinary participant and not the host, and Google Meet gives that action to the host
+only. The bot can remove itself and nothing more.
+
+**The bot also leaves by itself, but late.** `automatic_leave.everyone_left_timeout` has
+the default 2 seconds, so a bot goes 2 seconds after the last participant.
+`silence_detection` is 3600 seconds after a buffer of 1200 seconds, and
+`in_call_not_recording_timeout` is 3600 seconds. A patient who keeps the call open thus
+sees a silent bot for one hour. This is why the backend calls `leave_call` and does not
+wait for a timeout. `get_doc` for `automatic-leaving-behavior`.
+
 ## Real-time transcript (Mode 2)
 
 - Set the transcription provider to Recall's own transcription when creating the bot.

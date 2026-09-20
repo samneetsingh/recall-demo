@@ -97,8 +97,13 @@ the response, because Recall sends the events in sequence and has a 15 second ti
 **What the events do.** `bot.in_call_recording` starts the intake: the assistant sends
 a pinned consent notice and then asks its first question. A `participant_events.chat_message` is one patient turn: the backend
 reads the text, runs the engine, and sends the next question into the meeting chat. When
-the engine ends the intake, the backend writes the summary and then sends one closing
-message. `transcript.data` gets a log line only until section 6 of `TASKS.md`.
+the engine ends the intake, the backend writes the summary, sends one closing message,
+waits `BOT_LEAVE_DELAY_SECONDS`, and then takes the bot out of the call with
+`POST /api/v1/bot/{id}/leave_call/`. The patient thus does not have to remove the bot.
+The leave is irreversible, and a failed leave is a log line: the summary is written and
+the status stays `complete`. A session in `error` keeps its bot, because an error usually
+means that the bot takes no command. `transcript.data` gets a log line only until
+section 6 of `TASKS.md`.
 
 **The bot does not answer itself.** The bot receives its own chat messages back. A
 message whose sender name is the bot name is not a turn.

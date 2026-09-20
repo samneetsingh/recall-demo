@@ -3,11 +3,13 @@
 Written in ASD-STE100 Simplified Technical English.
 
 - **Date:** 2026-09-20
-- **Task:** Section 7 of [`../TASKS.md`](../TASKS.md). See
-  [`../task-07-frontend/todo.md`](../task-07-frontend/todo.md)
-- **Result:** complete — the page is built, deployed and proved in a live Google Meet
-  call from `recall.samneet.com`. The call also closed the two backend items that
-  session 09 left open.
+- **Task:** Section 7 of [`../TASKS.md`](../TASKS.md), then section 5a. See
+  [`../task-07-frontend/todo.md`](../task-07-frontend/todo.md) and
+  [`../task-05a-bot-leave/todo.md`](../task-05a-bot-leave/todo.md)
+- **Result:** complete for section 7 — the page is built, deployed and proved in a live
+  Google Meet call from `recall.samneet.com`. The call also closed the two backend items
+  that session 09 left open. Part 2 added section 5a, which takes the bot out of the
+  call at the end of an intake; it needs a live call to prove.
 
 ## Summary
 
@@ -198,3 +200,100 @@ Section 7 needs nothing more.
 **If section 8a:** the live calls of sessions 09 and 10 give the evidence. The model
 stopped early in each one, and the first question introduces the assistant a second
 time. `backend/app/engine/prompts.py` holds all of the text.
+
+
+---
+
+# Part 2 — The bot leaves the call (section 5a)
+
+Sam asked at the end of the session: can the bot leave, so the patient does not have to
+remove it? This part is `backend/` only, and it went in after the frontend commit
+`1f8bbb5`.
+
+## Files changed, part 2
+
+| File | Change | Reason |
+|---|---|---|
+| `backend/app/config.py` | edit | `BOT_LEAVE_DELAY_SECONDS`, 3.0 |
+| `backend/app/recall/client.py` | edit | `leave_call(bot_id)` |
+| `backend/app/routes/webhooks.py` | edit | `_send_closing_message` is `_finish_intake`. `_leave_call` |
+| `backend/tests/test_recall_client.py` | edit | 6 tests of the leave call |
+| `backend/tests/test_routes_webhooks.py` | edit | 9 tests of the wire, and `leave_call` in the `offline` fixture |
+| `docs/API_CONTRACT.md` | edit | The leave endpoint, and the automatic-leave defaults |
+| `docs/API_REFERENCE.md` | edit | What the backend does at the end of an intake |
+| `docs/FLOW.md` | edit | Flow C, and the note under it |
+| `docs/TASKS.md` | edit | Section 5a |
+| `docs/task-05a-bot-leave/todo.md` | new | The plan |
+
+**`app/engine/` and `app/modes/` did not change.** `frontend/` did not change.
+**This part added no package.**
+
+## Decisions, part 2
+
+- **The leave is not on the mode boundary.** `send_notice` went on the boundary in
+  section 5, because how a notice reaches the patient is mode-specific: chat pins a
+  message and voice will speak it. A leave is not mode-specific. It is one HTTP call to
+  Recall, and voice mode makes the same call, so `app/modes/` did not change and section
+  6 gets the behavior at no cost.
+- **`routes/webhooks.py` calls `recall/client.py` directly.** `../../CLAUDE.md` permits
+  a route to call into `engine/`, `recall/` or `db/`, and `routes/sessions.py` already
+  calls `create_bot` in the same manner. The leave is not part of the conversation, so
+  it is not in `engine/loop.py`, which is the same rule that keeps the closing line out
+  of it.
+- **A wait of 3 seconds between the line and the leave.** Sam selected it against no
+  wait. Recall answers HTTP 200 when it **accepts** a message, and the bot has still to
+  type it into the meeting. A leave with no wait can cut the closing line, which is the
+  same class of race as the notice-and-pin fault of session 09. The value is a setting,
+  so a live call can tune it with no code change.
+- **A session in `error` keeps its bot.** Sam selected it. An error usually means that
+  the bot takes no command, so the leave would fail in the same manner. The
+  `everyone_left_timeout` of 2 seconds still removes the bot when the patient goes.
+- **A failed leave is a log line.** The summary is written and the status is `complete`.
+  A bot that stays in the call is untidy, and it costs no data. A failed leave must
+  never change a complete session.
+
+## Verified facts, part 2
+
+- **`POST /api/v1/bot/{id}/leave_call/` is the endpoint, and it is irreversible.**
+  Method: `get_doc` for `bot_leave_call_create`. No request body, HTTP 200 with the bot
+  object or HTTP 400 with no body, 300 requests each minute for one workspace.
+- **Recall has no endpoint that ends a meeting for all participants.** The bot joins as
+  an ordinary participant, and Google Meet gives that action to the host only.
+- **The bot already left 2 seconds after the patient.** Method: `get_doc` for
+  `automatic-leaving-behavior`. `everyone_left_timeout` has the default 2 seconds. This
+  task is thus not a repair of a bot that stays for ever: it makes the bot leave **at
+  the end of the intake, while the patient is still there**. The other timeouts are
+  3600 seconds, so a patient who keeps the call open sees a silent bot for one hour.
+- **The 265 tests pass.** Method: `poetry run pytest -q` in `backend/`. Part 1 of this
+  session had 250, and section 5a added 15.
+- **No test uses the network.** Method: the plugin of lesson 3, then
+  `poetry run pytest -q -p block_network`. The result is 265 passed. **`leave_call` went
+  into the `offline` fixture of `test_routes_webhooks.py` before the route called it**,
+  which is the fault that lesson 3 records from session 09.
+- **The leave is load-bearing in the tests.** Method: remove `_leave_call(session)` from
+  `_finish_intake`, then run the suite. Three tests fail. Restore it, and 265 pass.
+- **The order of the closing line and the leave is load-bearing.** Method: move
+  `_leave_call(session)` above the `send_outgoing_turn` of the closing line, then run
+  the suite. `test_the_closing_line_goes_out_before_the_leave` fails and nothing else
+  does, so that test holds the rule by itself.
+- **`app/engine/` and `app/modes/` did not change.** Method:
+  `git diff --stat -- backend/app/engine/ backend/app/modes/` gives no line.
+
+## Corrections, part 2
+
+- **Wrong:** the bot sits in the call for ever after the intake, so a leave repairs a
+  bot that never goes. **Correct:** `everyone_left_timeout` already removes it 2 seconds
+  after the patient leaves. The true gain is the time **before** that: a bot that goes
+  when the intake ends, and not one that waits, silent, for the patient to act.
+
+## Open items, part 2
+
+- [ ] **A live Google Meet call to prove it.** The backend on the homelab runs the code
+      of commit `420eb23`, which has no leave. Sam deploys, then one call proves three
+      things: the closing line arrives complete, the bot leaves by itself, and the page
+      still shows the summary after the bot goes. Owner: Sam.
+- [ ] **Is 3 seconds the right delay?** A test cannot prove it. Read the Meet chat in
+      the live call: the closing line must be visible before the bot goes. If it is cut,
+      make `BOT_LEAVE_DELAY_SECONDS` larger. Owner: the live call.
+- [ ] Commit part 2. The working tree holds the five backend files and the plan.
+      Owner: Sam.

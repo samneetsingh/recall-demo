@@ -195,3 +195,74 @@ def test_a_pinned_message_carries_the_pin_key(monkeypatch: pytest.MonkeyPatch) -
     recall_client.send_chat_message(BOT_ID, CONSENT_NOTICE, pin=True)
 
     assert seen["body"] == {"to": "everyone", "message": CONSENT_NOTICE, "pin": True}
+
+
+def test_leave_call_posts_to_the_bot(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["method"] = request.method
+        seen["auth"] = request.headers["authorization"]
+        seen["body"] = json.loads(request.read())
+        return httpx.Response(200, json={"id": BOT_ID})
+
+    monkeypatch.setattr(httpx, "Client", _transport(handler))
+    recall_client.leave_call(BOT_ID)
+
+    assert seen["url"] == f"https://us-west-2.recall.ai/api/v1/bot/{BOT_ID}/leave_call/"
+    assert seen["method"] == "POST"
+    assert seen["auth"] == "Token test-recall-api-key"
+    # The endpoint takes no body.
+    assert seen["body"] == {}
+
+
+def test_leave_call_with_no_api_key_raises_before_a_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "RECALL_API_KEY", "")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("the client sent a request with no API key")
+
+    monkeypatch.setattr(httpx, "Client", _transport(handler))
+    with pytest.raises(RecallError, match="no Recall API key"):
+        recall_client.leave_call(BOT_ID)
+
+
+@pytest.mark.parametrize("code", [400, 404, 500])
+def test_a_failed_leave_raises_recall_error(
+    monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(code, text="the bot is not in a call")
+
+    monkeypatch.setattr(httpx, "Client", _transport(handler))
+    with pytest.raises(RecallError) as error:
+        recall_client.leave_call(BOT_ID)
+
+    assert f"recall http {code}" in str(error.value)
+
+
+def test_a_failed_leave_has_no_api_key_in_the_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="Invalid token: test-recall-api-key is wrong")
+
+    monkeypatch.setattr(httpx, "Client", _transport(handler))
+    with pytest.raises(RecallError) as error:
+        recall_client.leave_call(BOT_ID)
+
+    assert settings.RECALL_API_KEY not in str(error.value)
+
+
+def test_a_network_error_on_the_leave_raises_recall_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route to host")
+
+    monkeypatch.setattr(httpx, "Client", _transport(handler))
+    with pytest.raises(RecallError, match="recall request failed"):
+        recall_client.leave_call(BOT_ID)

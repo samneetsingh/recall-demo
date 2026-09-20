@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # The workspace verification secret, `whsec_...`. An empty value refuses every webhook request
     RECALL_WEBHOOK_SECRET: str = ""
 
+    # The wait between the closing line and the leave.
+    BOT_LEAVE_DELAY_SECONDS: float = 3.0
+
     # Where Recall reaches this backend. Makes the realtime endpoint URL
     PUBLIC_BASE_URL: str = "https://recall-api.ss-ubuntu-01.net"
 

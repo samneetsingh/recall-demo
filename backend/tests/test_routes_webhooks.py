@@ -41,12 +41,26 @@ def pinned() -> list[str]:
     return []
 
 
+@pytest.fixture
+def left() -> list[str]:
+    """The bot ids that were taken out of a call."""
+    return []
+
+
 @pytest.fixture(autouse=True)
-def offline(monkeypatch: pytest.MonkeyPatch, sent: list[str], pinned: list[str]) -> None:
+def offline(
+    monkeypatch: pytest.MonkeyPatch,
+    sent: list[str],
+    pinned: list[str],
+    left: list[str],
+) -> None:
     """No test in this file calls OpenAI or Recall.
 
     The route starts the intake now, so a test that makes a session
     `in_progress` reaches the model and the chat send. Both are fakes here.
+    Section 5a added a third caller, `leave_call`, which is a fake for the same
+    reason: a route that gains a caller takes a test file back on to the
+    network.
     """
     asked = {"count": 0}
 
@@ -70,6 +84,13 @@ def offline(monkeypatch: pytest.MonkeyPatch, sent: list[str], pinned: list[str])
             pinned.append(text)
 
     monkeypatch.setattr(recall_client, "send_chat_message", fake_send)
+
+    def fake_leave(bot_id: str) -> None:
+        left.append(bot_id)
+
+    monkeypatch.setattr(recall_client, "leave_call", fake_leave)
+    # The real delay is 3 seconds, which each test in this file would wait.
+    monkeypatch.setattr(settings, "BOT_LEAVE_DELAY_SECONDS", 0.0)
 
 
 def _post(client: TestClient, payload: dict, message_id: str = "msg_test_00000001"):
@@ -634,3 +655,159 @@ def test_a_notice_that_fails_does_not_stop_the_first_question(
     assert session_store.get_turns(session_id) == [
         {"role": "bot", "text": "question 1"}
     ]
+
+
+def _complete_on_the_next_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the model end the intake on its next answer."""
+    monkeypatch.setattr(
+        intake,
+        "ask_model",
+        lambda system, messages, schema, name: {
+            "action": "complete",
+            "turn": 2,
+            "question": "",
+            "notes": "",
+        },
+    )
+
+
+def test_a_complete_intake_takes_the_bot_out_of_the_call(
+    client: TestClient,
+    session_id: str,
+    sent: list[str],
+    left: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The patient must not have to remove the bot."""
+    _post(client, _bot_event("bot.in_call_recording"))
+    _complete_on_the_next_call(monkeypatch)
+
+    _chat(client, "two weeks", message_id="msg_02")
+
+    assert sent == [CONSENT_NOTICE, "question 1", CLOSING_MESSAGE]
+    assert left == [BOT_ID]
+
+
+def test_the_closing_line_goes_out_before_the_leave(
+    client: TestClient, session_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A leave before the line cuts the line. The order is the whole point."""
+    order: list[str] = []
+
+    def send(bot_id: str, text: str, pin: bool = False) -> None:
+        order.append(f"message:{text}")
+
+    def leave(bot_id: str) -> None:
+        order.append("leave")
+
+    monkeypatch.setattr(recall_client, "send_chat_message", send)
+    monkeypatch.setattr(recall_client, "leave_call", leave)
+
+    _post(client, _bot_event("bot.in_call_recording"))
+    _complete_on_the_next_call(monkeypatch)
+    _chat(client, "two weeks", message_id="msg_02")
+
+    assert order[-2:] == [f"message:{CLOSING_MESSAGE}", "leave"]
+
+
+def test_an_intake_that_continues_does_not_leave_the_call(
+    client: TestClient, session_id: str, left: list[str]
+) -> None:
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    _chat(client, "two weeks", message_id="msg_02")
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "in_progress"
+    assert left == []
+
+
+def test_a_message_after_the_intake_does_not_leave_a_second_time(
+    client: TestClient,
+    session_id: str,
+    left: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The leave is irreversible. A second call is an error against Recall."""
+    _post(client, _bot_event("bot.in_call_recording"))
+    _complete_on_the_next_call(monkeypatch)
+    _chat(client, "two weeks", message_id="msg_02")
+    assert left == [BOT_ID]
+
+    _chat(client, "thank you", message_id="msg_03")
+
+    assert left == [BOT_ID]
+
+
+def test_a_failed_leave_keeps_the_session_complete(
+    client: TestClient, session_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The summary is written. A bot that stays in the call costs no data."""
+    _post(client, _bot_event("bot.in_call_recording"))
+    _complete_on_the_next_call(monkeypatch)
+
+    def refuse(bot_id: str) -> None:
+        raise RecallError("recall http 400: the bot is not in a call")
+
+    monkeypatch.setattr(recall_client, "leave_call", refuse)
+
+    _chat(client, "two weeks", message_id="msg_02")
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "complete"
+    assert session.summary == SUMMARY_ANSWER
+
+
+def test_a_session_that_goes_to_error_keeps_its_bot(
+    client: TestClient, session_id: str, left: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sam selected this: an error usually means that the bot takes no command."""
+
+    def refuse(bot_id: str, text: str, pin: bool = False) -> None:
+        raise RecallError("recall http 400: the bot is not in a call")
+
+    monkeypatch.setattr(recall_client, "send_chat_message", refuse)
+
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "error"
+    assert left == []
+
+
+def test_a_session_with_no_bot_id_does_not_raise_on_the_leave(
+    client: TestClient, left: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session that got no bot has nothing to take out of a call."""
+    from app.routes import webhooks
+
+    session = session_store.create_session(MEETING_URL)
+    session_store.set_status(session.id, "complete")
+
+    webhooks._leave_call(session_store.get_session(session.id))
+
+    assert left == []
+
+
+def test_the_leave_waits_before_it_calls_recall(
+    client: TestClient, session_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wait is what keeps the closing line. A delay of 0 makes no call."""
+    from app.routes import webhooks
+
+    waited: list[float] = []
+    monkeypatch.setattr(webhooks.time, "sleep", lambda seconds: waited.append(seconds))
+
+    session = session_store.get_session(session_id)
+    assert session is not None
+
+    monkeypatch.setattr(settings, "BOT_LEAVE_DELAY_SECONDS", 0.0)
+    webhooks._leave_call(session)
+    assert waited == []
+
+    monkeypatch.setattr(settings, "BOT_LEAVE_DELAY_SECONDS", 3.0)
+    webhooks._leave_call(session)
+    assert waited == [3.0]

@@ -94,6 +94,25 @@ works end to end.
       09: the bot joined, asked 5 questions in the chat, and
       `GET /sessions/{id}/summary` gave the eight fields on the live URL.
 
+## 5a. The bot leaves when the intake is complete
+
+Found in session 10. The bot said the closing line and then waited in the call, silent,
+until the patient removed it. See `task-05a-bot-leave/todo.md`.
+
+- [x] `leave_call(bot_id)` in `app/recall/client.py`.
+      `POST /api/v1/bot/{id}/leave_call/` with no body. It is **irreversible**.
+- [x] The wire: `_finish_intake` in `routes/webhooks.py` says the closing line, waits
+      `BOT_LEAVE_DELAY_SECONDS`, and then takes the bot out of the call. Recall accepts
+      the message before the bot has typed it into the meeting, so a leave with no wait
+      can cut the line.
+- [x] The leave is **not** on the mode boundary. It is one HTTP call and it is the same
+      for chat and for voice, so `app/modes/` did not change and section 6 gets it free.
+- [x] A failed leave is a log line. The summary is written and the status is `complete`.
+- [x] A session in `error` keeps its bot. An error usually means that the bot takes no
+      command, so the leave would fail in the same manner.
+- [ ] Proved in a live Google Meet call: the closing line arrives, and the bot then
+      leaves by itself. **The delay is the one value that a test cannot prove.**
+
 ## 6. Voice mode (stretch, added alongside chat mode, not a rewrite of it)
 
 - [ ] OpenAI TTS wired up on the backend.

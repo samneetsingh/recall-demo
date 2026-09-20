@@ -8,15 +8,19 @@ chat messages and the transcript. The event sets do not intersect.
 from __future__ import annotations
 
 import logging
+import time
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
+from app.config import settings
 from app.db import session_store
 from app.db.models import Session, Status
 from app.engine import loop
 from app.modes.base import CLOSING_MESSAGE, CONSENT_NOTICE, ModeError, TurnMode, get_mode
 from app.modes.chat import CHAT_EVENT
+from app.recall import client as recall_client
 from app.recall import events as recall_events
+from app.recall.client import RecallError
 from app.recall.events import PayloadError, RecallEvent, SignatureError
 
 logger = logging.getLogger(__name__)
@@ -176,12 +180,13 @@ def _run_chat_turn(event: RecallEvent) -> None:
 
     if session.status != "complete":
         # `session` is the status before this turn. A message that arrives
-        # after the intake ended must not send the closing line again.
-        _send_closing_message(session.id, mode)
+        # after the intake ended must not send the closing line again, and it
+        # must not take the bot out of the call a second time.
+        _finish_intake(session.id, mode)
 
 
-def _send_closing_message(session_id: str, mode: TurnMode) -> None:
-    """Say one last line if the intake became complete on this turn."""
+def _finish_intake(session_id: str, mode: TurnMode) -> None:
+    """Say one last line and leave, if the intake became complete on this turn."""
     session = session_store.get_session(session_id)
     if session is None or session.status != "complete":
         return
@@ -192,3 +197,29 @@ def _send_closing_message(session_id: str, mode: TurnMode) -> None:
         # The intake is complete and the summary is written. A closing line
         # that did not go out must not take that away.
         logger.warning("session %s sent no closing message: %s", session_id, error)
+
+    _leave_call(session)
+
+
+def _leave_call(session: Session) -> None:
+    """Take the bot out of the meeting. The intake is over.
+
+    The patient must not have to remove the bot. A session in `error` keeps its
+    bot: an error usually means that the bot takes no command, and the leave
+    would fail in the same manner.
+    """
+    if session.bot_id is None:
+        return
+
+    # Recall accepted the closing line, and the bot has still to type it into
+    # the meeting. A leave with no wait can cut the line. This handler runs
+    # after the answer to Recall, so the wait costs nothing in the request.
+    if settings.BOT_LEAVE_DELAY_SECONDS > 0:
+        time.sleep(settings.BOT_LEAVE_DELAY_SECONDS)
+
+    try:
+        recall_client.leave_call(session.bot_id)
+    except RecallError as error:
+        # The summary is written and the status is `complete`. A bot that stays
+        # in the call is untidy, and it costs no data.
+        logger.warning("session %s did not leave the call: %s", session.id, error)

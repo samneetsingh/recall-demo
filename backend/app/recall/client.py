@@ -135,3 +135,13 @@ def send_chat_message(bot_id: str, text: str, pin: bool = False) -> None:
 
     _post(f"/api/v1/bot/{bot_id}/send_chat_message/", body)
     logger.info("sent %s characters to the chat of bot %s, pin %s", len(text), bot_id, pin)
+
+
+def leave_call(bot_id: str) -> None:
+    """Take a bot out of its meeting.
+
+    This is irreversible: the bot cannot come back, and a new bot needs a new
+    session. The endpoint takes no body.
+    """
+    _post(f"/api/v1/bot/{bot_id}/leave_call/", {})
+    logger.info("bot %s left the call", bot_id)
