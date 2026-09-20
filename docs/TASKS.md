@@ -110,8 +110,12 @@ until the patient removed it. See `task-05a-bot-leave/todo.md`.
 - [x] A failed leave is a log line. The summary is written and the status is `complete`.
 - [x] A session in `error` keeps its bot. An error usually means that the bot takes no
       command, so the leave would fail in the same manner.
-- [ ] Proved in a live Google Meet call: the closing line arrives, and the bot then
-      leaves by itself. **The delay is the one value that a test cannot prove.**
+- [x] Proved in a live Google Meet call, 2026-09-20. Bot
+      `193f426d-ba66-4cdc-ba6a-3ac67b642f2e`: the closing line went out at 09:21:17.393,
+      Recall logged `bot_received_leave_call` at 09:21:20.686, and
+      `POST /leave_call/` gave HTTP 200. The gap is 3.293 seconds, which is the 3.0
+      second wait and 0.29 seconds of overhead. Sam saw the closing line in the chat
+      before the bot left, so the delay is long enough.
 
 ## 6. Voice mode (stretch, added alongside chat mode, not a rewrite of it)
 

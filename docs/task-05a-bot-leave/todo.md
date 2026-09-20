@@ -152,13 +152,13 @@ The tests use no network. Each Recall call is a fake.
 - [x] The full suite passes. It is 250 tests now.
 - [x] No test uses the network.
 - [x] `git diff --stat -- backend/app/engine/ backend/app/modes/ frontend/` gives no line.
-- [ ] **A live Google Meet call.** The intake runs to the end, the closing line arrives
+- [x] **A live Google Meet call.** The intake runs to the end, the closing line arrives
       in the chat, **and the bot then leaves the call by itself.** `get_bot_logs` gives
       the `leave_call` request after the closing message, and `get_bot` gives the status
       `done`.
-- [ ] The page still shows the summary after the bot leaves. The page stops its poll at
+- [x] The page still shows the summary after the bot leaves. The page stops its poll at
       `complete`, so this must be true, and a call proves it.
-- [ ] **The delay is correct.** Read the Meet chat in the live call: the closing line
+- [x] **The delay is correct.** Read the Meet chat in the live call: the closing line
       must be visible before the bot goes. If it is cut, make
       `BOT_LEAVE_DELAY_SECONDS` larger. This is the one value that a test cannot prove.
 

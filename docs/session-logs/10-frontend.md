@@ -286,14 +286,58 @@ remove it? This part is `backend/` only, and it went in after the frontend commi
   after the patient leaves. The true gain is the time **before** that: a bot that goes
   when the intake ends, and not one that waits, silent, for the patient to act.
 
+## The live call, part 2
+
+Sam deployed and ran two calls. The first one, bot `3fedba10`, still had the old code:
+the closing line went out at 09:05:28 and **no `leave_call` request is in the bot logs**.
+The second one, bot `193f426d-ba66-4cdc-ba6a-3ac67b642f2e`, has the leave.
+
+- **The bot leaves the call by itself.** Method: `get_bot_logs`. The closing line went
+  out at `09:21:17.393`. Recall then wrote `Received a /leave_call request from your
+  server`, with the sub code `bot_received_leave_call`, at `09:21:20.686`, and
+  `POST /api/v1/bot/{id}/leave_call/ -> 200` at `09:21:20.732`.
+- **The delay is long enough.** The gap between the closing line and the leave is
+  **3.293 seconds**: the 3.0 second wait of `BOT_LEAVE_DELAY_SECONDS` and 0.29 seconds
+  of overhead. Sam saw the closing line in the Meet chat before the bot left, which is
+  the part that the log cannot show. `BOT_LEAVE_DELAY_SECONDS` does not need a change.
+- **Recall writes its own log line for the leave.** The sub code is
+  `bot_received_leave_call`. A later session can use it to find a leave in the logs.
+- **The notice still comes first.** The notice went out at `09:20:49.171` with
+  `"pin": true`, and the first question at `09:20:50.760`. The difference is 1.59
+  seconds.
+- **The page still shows the summary after the bot leaves.** Method:
+  `GET /sessions/a54e4fea974642ac843f88fc2583a912` gives `complete` with the eight
+  fields. The page stops its poll at `complete`, so the bot that goes changes nothing
+  on it.
+
+**A fault that a first deploy can make.** The first call proved that a deploy which
+does not rebuild the image gives a backend that answers each request correctly and does
+not have the new code. The closing line went out and the leave did not, and the two are
+three lines apart in one function. The test is
+`docker exec recall-api python -c "from app.recall import client; print(hasattr(client, 'leave_call'))"`,
+which reads the code that **runs** and not the code that is checked out.
+
+## What the calls show about the prompts
+
+Section 8a, with four live calls now. This session changed no prompt.
+
+| Call | Questions of 6 | Fields that say `not discussed` |
+|---|---|---|
+| Session 09, bot `2277e43d` | 5 | 2 |
+| Bot `a311030c` | 4 | 2 |
+| Bot `3fedba10` | 5 | 2 |
+| Bot `193f426d` | **3** | **3** of 8 |
+
+**The model never used its 6 questions, and the last call used 3.** The engine
+guarantees a maximum and not a minimum, so an early stop costs data: `triggers`,
+`prior_treatments` and `notes` came back `not discussed` in the last call. The first
+question also introduces the assistant a second time in each call, after the notice
+already did it. Both are open items of section 8a.
+
 ## Open items, part 2
 
-- [ ] **A live Google Meet call to prove it.** The backend on the homelab runs the code
-      of commit `420eb23`, which has no leave. Sam deploys, then one call proves three
-      things: the closing line arrives complete, the bot leaves by itself, and the page
-      still shows the summary after the bot goes. Owner: Sam.
-- [ ] **Is 3 seconds the right delay?** A test cannot prove it. Read the Meet chat in
-      the live call: the closing line must be visible before the bot goes. If it is cut,
-      make `BOT_LEAVE_DELAY_SECONDS` larger. Owner: the live call.
-- [ ] Commit part 2. The working tree holds the five backend files and the plan.
-      Owner: Sam.
+- [x] Commit part 2. Sam committed it as `1c4b794`, after the live call. The
+      documents of this part came after the commit.
+- [ ] Section 8a is more urgent than it was. The early stop got worse, not better, and
+      3 questions of 6 gives a summary where 3 of the 8 fields hold no data.
+      Owner: a later session.
