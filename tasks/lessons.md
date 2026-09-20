@@ -63,3 +63,29 @@ not change at the same time.
 `socket.socket.connect_ex` and `socket.create_connection` raise is 10 lines. Keep it in
 the scratchpad and run `poetry run pytest -p block_network` after each change to a
 route. Put the result in the session log.
+
+## The options of a question must not carry an action that Sam did not ask for
+
+**Date:** 2026-09-20. **Session:** 11.
+
+**What happened:** The session instructions said "No commit and no push." Sam then
+asked to move voice mode into a branch. I asked three questions with the question tool,
+and two of them were "How many commits on the branch?" and "Push the branch to origin?".
+Each option gave a number of commits, and no option said "make the branch and do not
+commit". Sam selected from what I gave him, and then said that he never told me to make
+commits.
+
+**The rule:** A question with options is for a decision that the request already
+contains. If a step is **not** in the request, the first option must be "do not do it",
+or the question must be "do you want this at all?". Never write a set of options in
+which each one does the step.
+
+**Why:** An option list looks like a choice and operates like an assumption. Sam reads
+three ways to commit and answers the question in front of him; the question that he did
+not get was whether to commit. The tool made the decision look like his, and it was
+mine.
+
+**How to apply:** Before you write the options, name the action and ask: did Sam ask for
+this action, or for a result that I decided needs it? If it is the second one, the
+first option is "do not". A constraint from earlier in the session, for example "no
+commit and no push", stays until Sam removes it in his own words.

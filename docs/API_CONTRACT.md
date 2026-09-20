@@ -97,19 +97,121 @@ wait for a timeout. `get_doc` for `automatic-leaving-behavior`.
 
 ## Real-time transcript (Mode 2)
 
-- Set the transcription provider to Recall's own transcription when creating the bot.
-- Subscribe to real-time transcript events (webhook or WebSocket, confirm which one
-  this build uses once implemented).
-- Use gaps in new transcript text as the turn-taking signal: after N seconds with no
-  new transcript, treat the patient's turn as done and pass it to the engine.
+**This build uses the webhook type, with Recall's own transcription.** Both fields are
+necessary together; if one is absent, no transcript event comes. `_recording_config()`
+in `app/recall/client.py` has held this since section 2, and **each bot of this build
+carries it, in chat mode and in voice mode**:
+
+```json
+"recording_config": {
+  "transcript": {
+    "provider": {
+      "recallai_streaming": { "mode": "prioritize_low_latency", "language_code": "en" }
+    }
+  },
+  "realtime_endpoints": [
+    { "type": "webhook", "url": "https://.../webhooks/recall",
+      "events": ["participant_events.chat_message", "transcript.data"] }
+  ]
+}
+```
+
+**The `transcript.data` payload.** One event is one **finalized utterance**. There is no
+sentence field: the words are a list, and each word has its own text. The shape is from
+the document `real-time-event-payloads`, which renders it from a component;
+`agent-quickstarts` gives the same schema as text.
+
+```json
+{
+  "event": "transcript.data",
+  "data": {
+    "data": {
+      "words": [
+        { "text": "headaches",
+          "start_timestamp": { "relative": 10.4 },
+          "end_timestamp": { "relative": 10.7 } }
+      ],
+      "language_code": "en",
+      "participant": { "id": 100, "name": "Samneet Singh", "is_host": true,
+                       "platform": "desktop", "extra_data": {}, "email": null }
+    },
+    "realtime_endpoint": { "id": "...", "metadata": {} },
+    "transcript": { "id": "...", "metadata": {} },
+    "recording": { "id": "...", "metadata": {} },
+    "bot": { "id": "...", "metadata": {} }
+  }
+}
+```
+
+The text is at `data.data.words[].text` and the speaker is at
+`data.data.participant.name`. **The payload has no field that says "the bot spoke
+this".** The bot plays its own audio into the meeting, so Recall can transcribe it back,
+and `app/modes/voice.py` compares the speaker name with `RECALL_BOT_NAME`, exactly as
+chat mode does with the sender name.
+
+**The timestamps are relative to the start of the recording**, in seconds. There is no
+absolute time on an utterance, unlike a chat message, which has
+`data.data.timestamp.absolute`.
+
+**The turn-taking signal is a silence, measured by the backend.** An utterance is not a
+turn: Recall warns that an utterance often arrives word by word, and a patient answers
+in parts. `app/modes/voice.py` puts each part in the `voice_buffers` table, and a
+`threading.Timer` of `VOICE_TURN_GAP_SECONDS` (2.5) ends the turn. See `FLOW.md` flow D.
+
+- Latency is 1 to 3 seconds. `prioritize_low_latency` gives the lower delay; the default
+  `prioritize_accuracy` uses an asynchronous model.
+- `transcript.partial_data` gives the words before the utterance is final. **This build
+  does not need it**, and it is not in `realtime_endpoints`.
+- `participant_events.speech_on` and `speech_off` are the other turn-taking signal.
+  Session 11 did not use them: `speech_off` has a low delay and `transcript.data` has 1
+  to 3 seconds, so `speech_off` arrives first and cuts the last words of an answer.
+  Google Meet also makes these events from the active-speaker mark, so a pause in a
+  sentence gives a `speech_off`. Look at them only if the silence timer is not good in
+  a live call.
+- Recall sends the webhooks in sequence. **A slow handler delays the next event**, so
+  the transcript path must not wait. The wake-up is a thread.
+- A failure of the transcription gives `transcript.failed` on the **dashboard** webhook
+  endpoint, not on the real-time endpoint. Do not put it in `realtime_endpoints`.
+- **Recall says not to use the real-time transcript for a conversational agent**, and to
+  use output media with a voice-to-voice model instead. `SPEC.md` scopes this build to
+  half duplex, with no interruption handling and a pause as the turn signal, so this
+  build keeps the transcript. The cost is the delay. See the README limitations.
 
 ## Output audio (Mode 2)
 
-- See "Output Speech/Audio from the Bot" in the docs.
-- Backend generates audio with OpenAI TTS, then sends it to Recall's output-audio
-  endpoint/stream so the bot plays it into the meeting.
-- Confirm expected audio format/encoding in the docs before wiring this up; do not
-  assume it matches OpenAI TTS's default output format.
+**`POST /api/v1/bot/{id}/output_audio/`**, with the body:
+
+```json
+{ "kind": "mp3", "b64_data": "<the base64 mp3>" }
+```
+
+`kind` accepts `mp3` only. OpenAI TTS gives mp3, so no conversion of the format is
+necessary: `app/recall/client.py` encodes the bytes to base64 and posts them.
+
+**The endpoint operates only if the bot was made with an `automatic_audio_output`
+configuration.** `build_request_body(meeting_url, session_id, "voice")` puts a short
+silent mp3 there, which is what Recall tells you to do when you do not want automatic
+audio:
+
+```json
+"automatic_audio_output": {
+  "in_call_recording": { "data": { "kind": "mp3", "b64_data": "<288 bytes of silence>" } }
+}
+```
+
+`replay_on_participant_join` is **not** in the body. The bot must say nothing by itself;
+it speaks from the endpoint only. **A chat bot has no `automatic_audio_output`**, so the
+chat body did not change in section 6.
+
+**Do not use Output Media for this demo.** It is the other method to make a bot speak:
+it streams a web page that you control into the meeting. It is more powerful, and it is
+mutually exclusive with `automatic_audio_output` and with the Output Audio endpoint, and
+it always sends video.
+
+Proved against the live API in session 11: `gpt-4o-mini-tts` made 86400 bytes of mp3
+from 81 characters, and `POST /api/v1/bot/{id}/output_audio/` was reached with the
+correct URL and body. The answer was HTTP 404, because the bot id of that check was
+invented.
 
 ## Bot status webhooks
 

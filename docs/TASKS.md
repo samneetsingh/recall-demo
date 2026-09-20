@@ -119,16 +119,40 @@ until the patient removed it. See `task-05a-bot-leave/todo.md`.
 
 ## 6. Voice mode (stretch, added alongside chat mode, not a rewrite of it)
 
-- [ ] OpenAI TTS wired up on the backend.
-- [ ] `send_outgoing_turn` implemented for voice: calls TTS, sends output audio
-      through Recall.
-- [ ] Backend subscribes to real-time transcript.
-- [ ] Silence-gap turn-taking logic implemented.
-- [ ] `handle_incoming_turn` implemented for voice: turns a transcript-gap
-      signal into patient text.
+See `task-06-voice-mode/todo.md` and `../session-logs/11-voice-mode.md`.
+
+- [x] OpenAI TTS wired up on the backend. `app/tts/openai_tts.py` is the one
+      module that knows about TTS. `gpt-4o-mini-tts`, voice `alloy`,
+      `response_format` `mp3`, and an `instructions` text for a calm tone.
+      Recall's output audio endpoint takes mp3 only.
+- [x] `send_outgoing_turn` implemented for voice: calls TTS, sends output audio
+      through Recall. `send_output_audio` encodes to base64 and posts to
+      `POST /api/v1/bot/{id}/output_audio/`. **A voice bot carries an
+      `automatic_audio_output` configuration with a short silent mp3**, because
+      the endpoint gives HTTP 400 without one.
+- [x] Backend subscribes to real-time transcript. **This was already true.**
+      `_recording_config()` sets `transcript.provider.recallai_streaming` with
+      `mode: prioritize_low_latency`, and `realtime_endpoints` lists
+      `transcript.data`. Verified, not built again.
+- [x] Silence-gap turn-taking logic implemented. The parts of one answer go in
+      the `voice_buffers` table (migration 6), and a `threading.Timer` of
+      `VOICE_TURN_GAP_SECONDS` (2.5) ends the turn. The flush is one
+      conditional UPDATE, so two wake-ups give one turn. Sam selected this.
+- [x] `handle_incoming_turn` implemented for voice: turns a transcript-gap
+      signal into patient text. A `transcript.data` utterance gives `None` and
+      goes in the buffer; a `VoiceTurnGap` gives the whole answer. The
+      `event_id` of the turn is `voice-<buffer rowid>`, because a voice turn is
+      made of many events and no Svix id names it.
+- [x] The consent notice for voice. `CONSENT_NOTICE_VOICE` says "Please answer
+      out loud" and the bot speaks it. `CONSENT_NOTICES` is keyed by the mode,
+      next to `MODES`. The chat text did not change.
 - [ ] Full loop tested against a real Google Meet call, start to summary.
-- [ ] Chat mode still works unchanged (it should not need to be touched to add
-      this).
+      **Owner: Sam.** The procedure is at the end of
+      `../session-logs/11-voice-mode.md`. A voice session starts with curl,
+      because the page sends the mode `chat` as a constant; see section 7a.
+- [x] Chat mode still works unchanged (it should not need to be touched to add
+      this). `git diff --stat -- backend/app/modes/chat.py` gives no line, and
+      the four engine modules did not change either.
 
 ## 7. Frontend
 
@@ -147,6 +171,37 @@ step and no new dependency. See `task-07-frontend/todo.md`.
 - [x] The error path. The status `error` shows `error_reason` as it is, in monospace.
       Proved with a real Recall refusal on the live backend.
 - [x] The `/health` check of item 1d is out of `public/index.html`.
+
+## 7a. The mode control on the page
+
+Sam asked for this in session 11, after section 6. A voice session started with
+curl before it:
+
+```bash
+curl -X POST https://recall-api.ss-ubuntu-01.net/sessions \
+  -H 'content-type: application/json' \
+  -d '{"meeting_url": "https://meet.google.com/xxx-xxxx-xxx", "mode": "voice"}'
+```
+
+- [x] A control on the page that selects chat or voice. A `select` in the form,
+      styled as the URL input is. `POST /sessions` carries what it holds.
+- [x] The instruction text is not the same for the two modes. A chat patient
+      answers in the meeting chat and a voice patient answers out loud. Two
+      texts change: the note under the form, which follows the control, and the
+      detail of `in_progress`, which follows the **poll**.
+- [x] **`GET /sessions/{id}` gives `mode`.** This is the one backend change of
+      this task, and it is the reason the task is not `frontend/` only. A reload
+      keeps the session id and nothing else, so the control is back at its
+      default while the session continues. The page must read the mode from the
+      backend, which owns it, and not hold a second copy in the URL. A poll with
+      no `mode` falls back to the chat text.
+- [ ] Deploy. The frontend needs `npm run deploy` and the backend needs a
+      rebuild, because `SessionResponse` changed. Owner: Sam.
+
+**Not in this task: the page still shows no conversation.** A chat patient reads
+the questions in the Meet chat; a voice patient sees nothing, because the
+questions are audio. A turns view needs a backend route for the `turns` table
+first. See `FLOW.md` part 8.
 
 ## 8. Deploy for real
 

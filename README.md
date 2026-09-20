@@ -62,7 +62,15 @@ timeline:
 - **Not HIPAA compliant.** A real clinical version of this would need to be. Not
   attempted here.
 - **Half-duplex voice only.** The bot does not handle interruptions or crosstalk. It
-  waits for a pause in the transcript to treat a turn as finished.
+  waits for a pause in the transcript to treat a turn as finished. The pause is 2.5
+  seconds, and a patient who thinks for longer sends half an answer.
+- **Voice mode uses the real-time transcript, and Recall says not to.** Recall's own
+  guide points a conversational agent at Output Media with a voice-to-voice model
+  instead. This build keeps the transcript on purpose: Output Media always sends video,
+  it is mutually exclusive with the output-audio endpoint this bot speaks through, and
+  full duplex is out of scope. The cost is the delay — 1 to 3 seconds for the
+  transcript, 2.5 for the pause, and the text-to-speech call on top. A production voice
+  agent would take Recall's route.
 - **Google Meet only.** Zoom and Microsoft Teams both need extra setup on Recall's
   side (Zoom needs an app registered in the Zoom Marketplace) that was not worth the
   time for a demo.

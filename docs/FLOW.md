@@ -8,9 +8,16 @@ this file for the path of one request.
 
 ## Read this first
 
-Sections 1 to 5 and section 7 of [`TASKS.md`](TASKS.md) are complete. A live Google
+Sections 1 to 5, 5a, 7 and 8 of [`TASKS.md`](TASKS.md) are complete. A live Google
 Meet call proved the full path on 2026-09-20: the bot joined, it interviewed a patient
 in the chat, and `GET /sessions/{id}/summary` gave the eight fields.
+
+**Voice mode is built. It has no live call yet.** Section 6 made
+`app/tts/openai_tts.py`, `app/modes/voice.py`, the `voice_buffers` table and the
+transcript wire. The assistant speaks each question with OpenAI TTS and Recall's output
+audio endpoint, and a silence in the transcript ends each patient turn. Flow D gives the
+path. A signed `transcript.data` against the container made one turn from three
+utterances. **A Google Meet call is the one step that is open.**
 
 **The page calls the backend now.** Section 7 made `frontend/public/index.html`: a
 meeting URL goes in, the page polls the status, and the eight fields come on the page at
@@ -30,8 +37,9 @@ cd backend && poetry run python scripts/intake_console.py
 
 It puts a terminal mode in the same registry that chat mode uses, and it runs the real
 state machine, the real database and the real model. You are the patient. It does not
-test the Recall wiring. The `Dockerfile` copies `app` only, so the script is not in the
-image.
+test the Recall wiring. The engine and the prompts are mode-neutral, so this covers
+voice mode as well: only the two ends of the turn boundary differ, and the tests hold
+those. The `Dockerfile` copies `app` only, so the script is not in the image.
 
 ## 1. The parts
 
@@ -49,9 +57,11 @@ flowchart LR
 
 ## 2. The state. It is all in the database
 
-The state of a session is one row in `sessions` and its rows in `turns`. **No state is
-in the process.** There is no global variable, no cache and no queue. Each request reads
-the database and writes the database, so a restart of the container loses no turn.
+The state of a session is one row in `sessions`, its rows in `turns`, and, for voice
+mode, its row in `voice_buffers`. **No state is in the process.** There is no global
+variable, no cache and no queue. Each request reads the database and writes the
+database, so a restart of the container loses no turn. Voice mode adds one wake-up
+thread, and it holds a session id and nothing more; see the end of this part.
 
 | Column | Who writes it | What it is |
 |---|---|---|
@@ -73,12 +83,37 @@ The conversation log is **not** in this row. It is the `turns` table:
 | `session_id` | The session |
 | `role` | `bot` or `patient` |
 | `text` | The words |
-| `event_id` | The Svix message id, or `NULL` for a bot turn. `UNIQUE(session_id, event_id)` makes a repeated delivery change nothing |
+| `event_id` | The Svix message id for a chat turn, `voice-<buffer id>` for a voice turn, or `NULL` for a bot turn. `UNIQUE(session_id, event_id)` makes a repeated delivery change nothing |
+| `created_at` | Time |
 
 The insert holds the rules of the conversation. A turn goes in only if the session
 exists, its `event_id` is new, **and its role is not the role of the last turn**. The
 log thus always alternates, and it cannot be otherwise.
+
+**Voice mode adds a third table, `voice_buffers`.** One `transcript.data` event is one
+finalized utterance, and **one utterance is not a turn**: a patient answers in parts.
+The parts wait here until a silence ends the turn.
+
+| Column | What it is |
+|---|---|
+| `id` | The rowid. It is the `event_id` of the turn that this buffer becomes, as `voice-<id>` |
+| `session_id` | The session |
+| `text` | The parts of one answer, joined with a space |
+| `last_part_at` | The time of the newest part, to the microsecond. The silence is measured from it |
+| `flushed_at` | `NULL` while the patient speaks. A time when the buffer became a turn |
 | `created_at` | Time |
+
+`CREATE UNIQUE INDEX voice_buffers_open ON voice_buffers(session_id) WHERE flushed_at IS
+NULL` is a **partial** index, and it is what makes one open buffer for one session. A
+part is one `INSERT ... ON CONFLICT ... DO UPDATE`, so two handlers cannot lose a part.
+The flush is one `UPDATE ... WHERE flushed_at IS NULL AND last_part_at <= ?`, so **two
+wake-ups give one turn**. This is the rule of `apply_bot_event`, applied again.
+
+**The timer is not state.** A `threading.Timer` wakes the process after
+`VOICE_TURN_GAP_SECONDS`, and it carries no words: it carries a session id. The words
+and the time are in the database, so a restart of the container loses the wake-up and
+not the answer. An early wake-up is never cancelled, because an early wake-up finds
+`last_part_at` too new and claims nothing.
 
 ## 3. What a turn is
 
@@ -253,6 +288,76 @@ same for chat and for voice. A session in `error` keeps its bot, because an erro
 usually means that the bot takes no command. The event that the leave makes,
 `bot.call_ended`, changes nothing: `apply_bot_event` has `AND status != 'complete'`.
 
+## 6a. Flow D — one voice turn. This operates, with no live call yet
+
+Flow C is chat mode. Voice mode is the same flow below `loop.run_turn`: the same state
+machine, the same engine, the same summary and the same leave. **The difference is at
+the two ends**, and this diagram gives only those ends.
+
+```mermaid
+sequenceDiagram
+    participant R as Recall.ai
+    participant W as routes/webhooks.py
+    participant MO as modes/voice.py
+    participant DB as SQLite
+    participant T as tts/openai_tts.py
+    participant L as engine/loop.py
+
+    Note over R,W: The patient speaks. One answer is several utterances.
+    loop for each transcript.data
+        R->>W: transcript.data (a finalized utterance)
+        W-->>R: 200 {"ok": true}
+        W->>MO: handle_incoming_turn(session_id, event) → None
+        Note over MO: The words are at data.data.words[].text.<br/>The bot's own speech gives None.
+        MO->>DB: add_voice_part() — one upsert on the open buffer
+        W->>DB: open_voice_buffer()
+        opt a buffer is open
+            W->>W: threading.Timer(VOICE_TURN_GAP_SECONDS, flush_voice_turn)
+        end
+    end
+
+    Note over W: The patient stops. The newest wake-up fires.
+    W->>MO: handle_incoming_turn(session_id, VoiceTurnGap) → the whole answer
+    MO->>DB: claim_voice_buffer(now - gap)
+    Note over DB: One UPDATE. It gives the row only if<br/>flushed_at IS NULL and no part came after<br/>the gap. An early wake-up gets nothing.
+    MO-->>W: the text, and gap.event_id = "voice-<buffer id>"
+    W->>L: run_turn(session_id, text, gap.event_id)
+    Note over L: From here the path is flow C, with no change.
+    L->>MO: send_outgoing_turn(session_id, question)
+    MO->>T: speak(question)
+    T-->>MO: mp3 bytes
+    MO->>R: POST /api/v1/bot/{id}/output_audio/ {"kind": "mp3", "b64_data": ...}
+    Note over MO,R: A TTSError and a RecallError each become<br/>a ModeError, and loop.py puts the session in error.
+```
+
+**One utterance is not a turn.** Recall says that an utterance often arrives word by
+word. `handle_incoming_turn` thus gives `None` for each `transcript.data`, and the
+answer comes from the wake-up that follows the last part.
+
+**The wake-up is a thread and not a sleep.** Recall sends the webhooks in sequence, and
+a wait on the transcript path would delay each later utterance. `time.sleep` is on the
+completion path only, between the closing line and the leave, and it runs one time.
+
+**Each part arms its own wake-up, and none is cancelled.** Three parts arm three
+wake-ups. The first two find `last_part_at` newer than `now - gap` and claim nothing.
+The third one claims the row, and a fourth wake-up for the same buffer finds
+`flushed_at` set. **Two wake-ups cannot make two turns.**
+
+**The `event_id` is the buffer rowid, not a Svix message id.** A voice turn is made of
+many events, so no one message names it. One buffer row becomes one turn, and the claim
+gives a row one time, so `voice-<id>` gives the same repeat protection that the Svix id
+gives a chat turn.
+
+**The consent notice is spoken, not pinned.** `CONSENT_NOTICES` is keyed by the mode:
+the chat text ends "Please answer in the chat" and the voice text ends "Please answer
+out loud". `send_notice` is the same method on both modes, and the notice is not a turn
+in either one.
+
+**A chat message in a voice session is not a turn, and a transcript in a chat session
+opens no buffer.** One `realtime_endpoints` list carries both events to each bot, so
+each mode receives the events of the other. Each one gives `None` for them. Sam selected
+this: one session has one mode.
+
 ## 7. The status machine
 
 ```mermaid
@@ -275,12 +380,12 @@ in the same statement as the write.
 
 `frontend/public/index.html` is one page of plain HTML and JS. It is on
 `recall.samneet.com`, and it operates against the live backend. **Three routes and
-nothing else. The frontend never learns the mode.**
+nothing else.**
 
 | Route | When | Gives |
 |---|---|---|
-| `POST /sessions` | one time, on submit | `session_id` and `status`. The body is `{meeting_url, mode: "chat"}` |
-| `GET /sessions/{id}` | every 2.5 seconds | `status`, `error_reason`, `summary` |
+| `POST /sessions` | one time, on submit | `session_id` and `status`. The body is `{meeting_url, mode}`, and the mode is a control |
+| `GET /sessions/{id}` | every 2.5 seconds | `status`, `mode`, `error_reason`, `summary` |
 | `GET /sessions/{id}/summary` | one time, after `complete` | The eight fields |
 
 **The page renders from the poll only.** The status in the answer to `POST /sessions`
@@ -298,14 +403,27 @@ session has this id. **A failed request does not stop the poll.** The backend is
 home server behind a tunnel, so the page shows a warning, keeps the last known status,
 and sends the next request at the usual time.
 
-**The mode is a constant in the page.** It is `chat`. Voice mode is section 6 of
-`TASKS.md` and it has no implementation, so a session with the mode `voice` goes to
-`error`. There is no control for it, and the page has nothing else that is
-mode-specific.
+**The mode is a control, and the page reads it back from the poll.** The form has a
+chat/voice selector, and `POST /sessions` carries what it holds.
+
+**One text is not the same for the two modes: how the patient must answer.** A chat
+patient answers in the meeting chat and a voice patient answers out loud. The page takes
+that text from `body.mode` of the **poll**, and never from the control. A reload keeps
+the session id only, so the control is back at its default while the session continues;
+the backend owns the mode, and the page must not hold a second copy of it. This is the
+same rule that makes the page render from the poll and not from the answer to
+`POST /sessions`: one source of truth cannot disagree with itself.
+
+`GET /sessions/{id}` thus gives `mode`, which it did not before section 7a. A poll with
+no `mode`, which is what a backend of an older version gives, falls back to the chat
+text.
 
 **What the page does not read.** There is no route for the `turns` table, so the page
-does not show the conversation. The patient reads the questions in the meeting chat,
-where the bot sends them. A turns view needs a backend route first.
+does not show the conversation. A chat patient reads the questions in the meeting chat,
+where the bot sends them. **A voice patient sees nothing at all**: the questions are
+audio, so the page gives no sign that the bot heard an answer. A turns view needs a
+backend route first, and it is the one part of voice mode that the page cannot show
+today.
 
 **Three texts of the backend go on the page without a change:**
 
@@ -320,12 +438,22 @@ that a fault of its own, and the page does not hide a fault of the backend.
 
 ## 9. What is not built, and what is weak
 
-**Not built. This is section 6 and it is planned.**
+**Not built.**
 
-- Voice mode: `tts/openai_tts.py`, the transcript parser, and the silence-gap timer.
-  `transcript.data` arrives at the webhook route and gets a log line only.
-- `MODES` has `chat` and not `voice`. A session with the mode `voice` goes to `error`
-  with the reason `the mode voice has no implementation`.
+- **A live Google Meet call in voice mode.** The code operates and no call proved it.
+  The procedure is at the end of [`session-logs/11-voice-mode.md`](session-logs/11-voice-mode.md).
+  Owner: Sam.
+- **A mode control on the page.** `frontend/public/index.html` sends the mode `chat` as
+  a constant, so a voice session starts with curl. This is section 7a of
+  [`TASKS.md`](TASKS.md). Sam selected it.
+- Prompt tuning. Section 8a. Four live calls show that the model stops with questions
+  unused, and that the first question introduces the assistant a second time.
+
+**Repaired by task 6.**
+
+- ~~Voice mode: `tts/openai_tts.py`, the transcript parser, and the silence-gap timer.~~
+  Built. `transcript.data` drives the buffer now.
+- ~~`MODES` has `chat` and not `voice`.~~ It has both.
 
 **Repaired by task 4. Kept here so the reason is not lost.**
 
@@ -370,4 +498,27 @@ that a fault of its own, and the page does not hide a fault of the backend.
    of session 05, and the webhook applied it to the session of session 05, which was
    `error`. The log line `session <id> is error, no turn` is what this looks like.
 
-All six are next steps for the README, not faults of the store.
+**Weak, and specific to voice mode.**
+
+7. **A pause in the middle of a sentence ends the turn.** The signal is a silence of
+   `VOICE_TURN_GAP_SECONDS` (2.5) and nothing more. A patient who thinks for three
+   seconds sends half an answer to the engine, and the second half is refused by the
+   half-duplex insert. `participant_events.speech_off` is the other signal, and it has
+   its own fault: it arrives before the last `transcript.data`, which has a delay of 1
+   to 3 seconds. `SPEC.md` gives the pause, and a live call must tune the value.
+8. **Each participant who is not the bot is the patient.** The echo filter compares the
+   speaker name with `RECALL_BOT_NAME`, as chat mode does. A second person in the call
+   thus speaks into the same buffer. `SPEC.md` has one patient.
+9. **Recall says not to do this.** The document `bot-real-time-transcription` says to
+   use output media with a voice-to-voice model for a conversational agent, and not the
+   real-time transcript. This build keeps the `SPEC.md` design on purpose: half duplex,
+   no interruption handling, and a pause as the turn signal. Output media is mutually
+   exclusive with the output audio endpoint, it always sends video, and full duplex is
+   out of scope. The trade-off is the delay: the transcript has 1 to 3 seconds, the
+   silence adds 2.5, and the TTS call adds its own.
+10. **A wake-up that the container loses stops the conversation.** The words are in the
+    database and the wake-up is not. A restart between the last utterance and the gap
+    thus leaves an open buffer that nothing claims, and the patient waits. The next
+    utterance arms a new wake-up and the answer comes back, one turn late.
+
+All of these are next steps for the README, not faults of the store.
