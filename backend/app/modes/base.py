@@ -29,6 +29,20 @@ class TurnMode(Protocol):
     def send_outgoing_turn(self, session_id: str, text: str) -> None:
         """Send one assistant turn into the meeting."""
 
+    def send_notice(self, session_id: str, text: str) -> None:
+        """Send the consent notice, before the first question.
+
+        It is not a turn, so it is not in the conversation log. Chat mode pins
+        it, and voice mode will speak it.
+        """
+
+
+# The consent notice, sent one time when the bot is in the call
+CONSENT_NOTICE = (
+    "Hello. I am an AI intake assistant, not a physician. "
+    "I ask a few questions about your headaches before your visit, and your "
+    "answers go into a summary for your clinician. Please answer in the chat."
+)
 
 # The last message of the intake. It is mode-neutral: voice mode says the same
 # words through TTS. It is not a turn, so it is not in the conversation log.

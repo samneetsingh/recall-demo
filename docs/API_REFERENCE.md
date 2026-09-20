@@ -94,8 +94,8 @@ every request.
 A verified request gives HTTP 200 and `{"ok": true}` immediately. The work runs after
 the response, because Recall sends the events in sequence and has a 15 second timeout.
 
-**What the events do.** `bot.in_call_recording` starts the intake, so the assistant asks
-its first question. A `participant_events.chat_message` is one patient turn: the backend
+**What the events do.** `bot.in_call_recording` starts the intake: the assistant sends
+a pinned consent notice and then asks its first question. A `participant_events.chat_message` is one patient turn: the backend
 reads the text, runs the engine, and sends the next question into the meeting chat. When
 the engine ends the intake, the backend writes the summary and then sends one closing
 message. `transcript.data` gets a log line only until section 6 of `TASKS.md`.

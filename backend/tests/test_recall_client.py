@@ -7,7 +7,8 @@ import pytest
 
 from app.config import settings
 from app.recall import client as recall_client
-from app.recall.client import CONSENT_NOTICE, RecallError
+from app.modes.base import CONSENT_NOTICE
+from app.recall.client import RecallError
 from tests.conftest import mock_httpx_client as _transport
 
 BOT_ID = "bot-abc"
@@ -24,10 +25,9 @@ def test_body_has_the_v111_shape() -> None:
     assert config["participant_events"] == {}
     assert "recallai_streaming" in config["transcript"]["provider"]
 
-    hook = body["chat"]["on_bot_join"]
-    assert hook["send_to"] == "everyone"
-    assert hook["message"] == CONSENT_NOTICE
-    assert hook["pin"] is True
+    # No `chat.on_bot_join`. The backend sends the notice, so the order is
+    # exact: the notice, then the first question. See session log 09.
+    assert "chat" not in body
 
     endpoint = config["realtime_endpoints"][0]
     assert endpoint["type"] == "webhook"
@@ -128,7 +128,8 @@ def test_send_chat_message_posts_to_the_bot(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert seen["url"] == f"https://us-west-2.recall.ai/api/v1/bot/{BOT_ID}/send_chat_message/"
     assert seen["auth"] == "Token test-recall-api-key"
-    # Google Meet takes the recipient `everyone` only.
+    # Google Meet takes the recipient `everyone` only. The `pin` key is absent
+    # unless a caller asks for it.
     assert seen["body"] == {"to": "everyone", "message": "Where is the pain?"}
 
 
@@ -181,3 +182,16 @@ def test_a_network_error_on_a_send_raises_recall_error(
     monkeypatch.setattr(httpx, "Client", _transport(handler))
     with pytest.raises(RecallError, match="recall request failed: ConnectTimeout"):
         recall_client.send_chat_message(BOT_ID, "Where is the pain?")
+
+
+def test_a_pinned_message_carries_the_pin_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.read())
+        return httpx.Response(200, json={"id": BOT_ID})
+
+    monkeypatch.setattr(httpx, "Client", _transport(handler))
+    recall_client.send_chat_message(BOT_ID, CONSENT_NOTICE, pin=True)
+
+    assert seen["body"] == {"to": "everyone", "message": CONSENT_NOTICE, "pin": True}

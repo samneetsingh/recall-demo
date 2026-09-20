@@ -14,7 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from app.db import session_store
 from app.db.models import Session, Status
 from app.engine import loop
-from app.modes.base import CLOSING_MESSAGE, ModeError, TurnMode, get_mode
+from app.modes.base import CLOSING_MESSAGE, CONSENT_NOTICE, ModeError, TurnMode, get_mode
 from app.modes.chat import CHAT_EVENT
 from app.recall import events as recall_events
 from app.recall.events import PayloadError, RecallEvent, SignatureError
@@ -113,9 +113,10 @@ def handle_event(event: RecallEvent) -> None:
     logger.info("session %s is now %s, event %s", session.id, status, event.name)
 
     if status == "in_progress":
-        # The bot is in the call, so the assistant asks its first question.
-        # `apply_bot_event` gave True, so a repeated event does not arrive here.
-        loop.start_intake(session.id)
+        # The bot is in the call. The notice goes out first, then the first
+        # question. `apply_bot_event` gave True, so a repeated event does not
+        # arrive here and the notice goes out one time.
+        _start_chat_intake(session)
 
 
 def _session_of(event: RecallEvent) -> Session | None:
@@ -130,6 +131,26 @@ def _session_of(event: RecallEvent) -> Session | None:
         return None
 
     return session
+
+
+def _start_chat_intake(session: Session) -> None:
+    """Send the consent notice, then ask the first question."""
+    try:
+        mode = get_mode(session.mode)
+    except ModeError as error:
+        logger.warning("session %s has no mode: %s", session.id, error)
+        session_store.set_status(session.id, "error", str(error))
+        return
+
+    try:
+        mode.send_notice(session.id, CONSENT_NOTICE)
+    except ModeError as error:
+        # The notice is not the intake. If the meeting refuses it, the first
+        # question fails in the same manner, and `engine/loop.py` writes the
+        # reason on the session.
+        logger.warning("session %s sent no notice: %s", session.id, error)
+
+    loop.start_intake(session.id)
 
 
 def _run_chat_turn(event: RecallEvent) -> None:

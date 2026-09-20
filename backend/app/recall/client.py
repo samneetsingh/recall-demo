@@ -99,15 +99,9 @@ def build_request_body(meeting_url: str, session_id: str) -> dict[str, Any]:
         "bot_name": settings.RECALL_BOT_NAME,
         # Recall shows the metadata in the dashboard and in the bot logs, which makes a failed bot easy to find.
         "metadata": {"session_id": session_id},
-        # Google Meet keeps a pinned message visible for a participant who
-        # joins later. The pin needs continuous chat off in the call.
-        "chat": {
-            "on_bot_join": {
-                "send_to": "everyone",
-                "message": CONSENT_NOTICE,
-                "pin": True,
-            }
-        },
+        # No `chat.on_bot_join` hook. Recall sends that message when the bot
+        # joins, and it arrived after the first question in the live call of
+        # session 09. The backend sends the notice itself now, in order.
         "recording_config": _recording_config(),
     }
 
@@ -128,12 +122,16 @@ def create_bot(meeting_url: str, session_id: str, mode: Mode = "chat") -> str:
     return str(bot_id)
 
 
-def send_chat_message(bot_id: str, text: str) -> None:
+def send_chat_message(bot_id: str, text: str, pin: bool = False) -> None:
     """Send one chat message into the meeting of a bot.
 
     Google Meet takes the recipient `everyone` only, so it is not a parameter.
     It also refuses a message of more than 500 characters; `app/modes/chat.py`
     applies that limit before it calls this function.
     """
-    _post(f"/api/v1/bot/{bot_id}/send_chat_message/", {"to": "everyone", "message": text})
-    logger.info("sent %s characters to the chat of bot %s", len(text), bot_id)
+    body: dict[str, Any] = {"to": "everyone", "message": text}
+    if pin:
+        body["pin"] = True
+
+    _post(f"/api/v1/bot/{bot_id}/send_chat_message/", body)
+    logger.info("sent %s characters to the chat of bot %s, pin %s", len(text), bot_id, pin)

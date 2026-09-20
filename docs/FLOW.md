@@ -8,8 +8,9 @@ this file for the path of one request.
 
 ## Read this first
 
-Sections 1 to 5 of [`TASKS.md`](TASKS.md) are complete, with one item open: the live
-Google Meet call of section 5.
+Sections 1 to 5 of [`TASKS.md`](TASKS.md) are complete. A live Google Meet call proved
+the full path on 2026-09-20: the bot joined, it interviewed a patient in the chat, and
+`GET /sessions/{id}/summary` gave the eight fields.
 
 **The webhook drives the engine now.** Section 5 made `modes/chat.py`, put it in the
 `MODES` registry, and added the two calls that were absent: `loop.start_intake` when the
@@ -169,7 +170,7 @@ sequenceDiagram
         W->>DB: apply_bot_event(id, status, reason, event_at)
         Note over DB: One UPDATE. It applies the event only if<br/>event_at > last_event_at and status is not complete.
         opt the UPDATE changed the row and the new status is in_progress
-            W->>W: loop.start_intake(session_id) — flow C
+            W->>W: send_notice(CONSENT_NOTICE), then loop.start_intake() — flow C
         end
     end
 ```
@@ -224,12 +225,15 @@ sequenceDiagram
     Note over W: The closing line is not a turn, so it is<br/>not in the log. loop.py does not send it.
 ```
 
-**The first question.** `bot.in_call_recording` calls `loop.start_intake`, which is the
-same path with no patient turn at the start of it. Before that, the create-bot hook
-`chat.on_bot_join` sends the pinned consent notice: Recall sends it, not this backend.
+**The first question.** `bot.in_call_recording` calls `_start_chat_intake`. That sends
+the pinned consent notice with `send_notice`, and then calls `loop.start_intake`, which
+is the same path as a turn with no patient message at the start of it. The notice and
+the question thus go out in order, from one process. The create-bot hook
+`chat.on_bot_join` did this before, and Recall sent the notice after the first question
+in the live call of session 09.
 
-**Three messages of the bot are not turns:** the pinned notice, the closing line, and a
-question that went out in two parts counts one time. The log holds what the engine said,
+**Two messages of the bot are not turns:** the pinned notice and the closing line. A
+question that goes out in two parts is one turn and one row. The log holds what the engine said,
 one row for each question.
 
 ## 7. The status machine
@@ -304,4 +308,11 @@ Two routes and nothing else. The frontend never learns the mode.
    retries a real-time message with its own policy: 60 attempts, one each second. If the
    id changes, a retry makes a second turn.
 
-All five are next steps for the README, not faults of the store.
+6. **Two sessions can hold one bot id.** `get_session_by_bot_id` is
+   `SELECT * FROM sessions WHERE bot_id = ?`, with no order and no limit, so it gives an
+   arbitrary row. Recall gives a new bot for each session, so the application cannot make
+   this condition. A test can: session 09 sent a chat event for the bot of the live call
+   of session 05, and the webhook applied it to the session of session 05, which was
+   `error`. The log line `session <id> is error, no turn` is what this looks like.
+
+All six are next steps for the README, not faults of the store.

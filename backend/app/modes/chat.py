@@ -92,6 +92,17 @@ class ChatMode:
 
     def send_outgoing_turn(self, session_id: str, text: str) -> None:
         """Send one assistant turn into the meeting chat."""
+        self._send(session_id, text, pin=False)
+
+    def send_notice(self, session_id: str, text: str) -> None:
+        """Send the consent notice, and pin it.
+
+        A pinned message stays visible for a participant who joins later.
+        """
+        self._send(session_id, text, pin=True)
+
+    def _send(self, session_id: str, text: str, pin: bool) -> None:
+        """Send one message as one or more chat messages."""
         # `base.py` imports this module, so this import is not at the top.
         from app.modes.base import ModeError
 
@@ -112,7 +123,7 @@ class ChatMode:
 
         for part in parts:
             try:
-                recall_client.send_chat_message(session.bot_id, part)
+                recall_client.send_chat_message(session.bot_id, part, pin=pin)
             except RecallError as error:
                 # `engine/loop.py` catches ModeError and puts the session in
                 # `error`. A RecallError goes past it, and the intake then

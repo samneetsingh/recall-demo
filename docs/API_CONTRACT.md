@@ -33,17 +33,16 @@ it against the session in SQLite.
 only, and it refuses a message of more than 500 characters. `app/modes/chat.py` cuts a
 longer message into parts.
 
-**Send when the bot joins.** The create-bot body takes a `chat` object with the hooks
-`on_bot_join` and `on_participant_join`. This build uses the first one for the consent
-notice:
+**Pin a message.** The send endpoint takes `"pin": true`. A pinned message stays
+visible for a participant who joins later. **The pin needs continuous chat disabled in
+the call.** If it is on, the message goes out and the pin does not.
 
-```json
-"chat": { "on_bot_join": { "send_to": "everyone", "message": "...", "pin": true } }
-```
-
-`pin` is supported on Google Meet, and the pinned message stays visible for a
-participant who joins later. **The pin needs continuous chat disabled in the call.** If
-it is on, the message goes out and the pin does not.
+**The create-bot `chat` hooks. This build does not use them.** The body takes a `chat`
+object with `on_bot_join` and `on_participant_join`, and `on_bot_join` sent the consent
+notice up to session 09. Recall sends that message, so its time is not under the control
+of the backend: in the live call the first question went out 1.74 seconds after the join
+and the notice came after it. The backend sends the notice itself now, with the send
+endpoint and `pin`, immediately before the first question.
 
 **Receive.** The real-time endpoint of the create-bot request, with the event
 `participant_events.chat_message`. The true shape, from the document

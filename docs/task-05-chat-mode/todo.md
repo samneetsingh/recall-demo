@@ -284,7 +284,7 @@ as `tests/test_engine_loop.py` does today.
       turn is in the log. The send fails with a `RecallError` for a bot that is not in a
       call, and the session then goes to `error` with that reason — **which is the proof
       that a failed send is not silent.**
-- [ ] **The live Google Meet call.** Sam deploys first, then hosts the call. Sam must
+- [x] **The live Google Meet call.** Sam deploys first, then hosts the call. Sam must
       disable continuous chat if he wants the pinned notice. Read:
   - the notice arrives when the bot joins, and it is pinned;
   - the first question arrives with no answer from the patient;
@@ -292,7 +292,7 @@ as `tests/test_engine_loop.py` does today.
   - `GET /sessions/{id}` gives `complete`, and `GET /sessions/{id}/summary` gives the
     eight fields;
   - the closing line is the last message in the chat.
-- [ ] **Read the true echo in that call.** The `webhook-id` header of a real-time event
+- [x] **Read the true echo in that call.** The `webhook-id` header of a real-time event
       is not yet proved to stay the same for a retry. Recall retries a real-time message
       up to 60 times. If the header changes, the repeat protection does not operate, and
       that is a finding for the session log and for section 6.

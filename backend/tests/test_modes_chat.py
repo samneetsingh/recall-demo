@@ -238,3 +238,46 @@ def test_a_recall_failure_becomes_a_mode_error(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(ModeError, match="recall http 400"):
         ChatMode().send_outgoing_turn(session_id, "Where is the pain?")
+
+
+def test_the_notice_goes_out_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pinned message stays visible for a participant who joins later."""
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.read())
+        return httpx.Response(200, json={"id": BOT_ID})
+
+    monkeypatch.setattr(httpx, "Client", mock_httpx_client(handler))
+    session_id = _session_with_bot()
+
+    ChatMode().send_notice(session_id, "Hello. I am an AI intake assistant.")
+
+    assert seen["body"]["pin"] is True
+    assert seen["body"]["message"] == "Hello. I am an AI intake assistant."
+
+
+def test_a_question_is_not_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.read())
+        return httpx.Response(200, json={"id": BOT_ID})
+
+    monkeypatch.setattr(httpx, "Client", mock_httpx_client(handler))
+    session_id = _session_with_bot()
+
+    ChatMode().send_outgoing_turn(session_id, "Where is the pain?")
+
+    assert "pin" not in seen["body"]
+
+
+def test_a_failed_notice_raises_mode_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="continuous chat is on")
+
+    monkeypatch.setattr(httpx, "Client", mock_httpx_client(handler))
+    session_id = _session_with_bot()
+
+    with pytest.raises(ModeError, match="recall http 400"):
+        ChatMode().send_notice(session_id, "Hello.")

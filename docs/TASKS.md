@@ -90,7 +90,9 @@ works end to end.
       summary is written. It is not a turn, so it is not in the log.
 - [x] `engine/intake.py`, `summary.py`, `prompts.py` and `loop.py` did not
       change. `git diff` on `app/engine/` gives no line.
-- [ ] Full loop tested against a real Google Meet call, start to summary.
+- [x] Full loop tested against a real Google Meet call, start to summary. Session
+      09: the bot joined, asked 5 questions in the chat, and
+      `GET /sessions/{id}/summary` gave the eight fields on the live URL.
 
 ## 6. Voice mode (stretch, added alongside chat mode, not a rewrite of it)
 
@@ -126,9 +128,22 @@ one file.
 - [ ] Make a small evaluation: more than one scripted patient, the same prompts, and a
       look at each summary. Sam has a synthetic suite from an earlier project that ran
       the same intake against other models. Use its shape.
+- [ ] **The order of the first two messages.** The pinned notice comes from Recall,
+      through the create-bot hook, and the first question comes from this backend. In
+      session 09 the question went out 1.74 seconds after the join and the notice came
+      after it. This is a code choice and not a prompt, so it is not part of this
+      section. See `../session-logs/09-chat-mode.md`.
+- [ ] **The first question introduces the assistant a second time.** The pinned
+      notice says "I am an AI intake assistant, not a physician", and the live call of
+      session 09 then gave "Hello, I'm the intake assistant. Can you tell me about your
+      headache?". The notice does the introduction, so the first question must ask only.
+      Rule 1 of the intake prompt tells the model to introduce itself; remove that and
+      keep the question.
 - [ ] The model sometimes gives the action `complete` with one question left, although
       rule 9 says to use each question. The engine guarantees a maximum of 6 turns and
-      not a minimum.
+      not a minimum. The live call of session 09 stopped after 5 turns, and it never
+      asked about prior treatments, so `prior_treatments` came back `not discussed`.
+      That field is one of the eight of `SPEC.md`, so an early stop costs data.
 - [ ] The red-flag rule is sensitive. Session 07 saw both faults in one session: the
       model invented "the worst headache of my life" from "really bad headaches", and
       then, after the first repair, it reported no red flag for a patient who gave

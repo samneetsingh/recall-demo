@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.config import settings
 from app.db import session_store
 from app.engine import intake, prompts, summary as summary_engine
-from app.modes.base import CLOSING_MESSAGE
+from app.modes.base import CLOSING_MESSAGE, CONSENT_NOTICE
 from app.recall import client as recall_client
 from app.recall.client import RecallError
 from tests.conftest import chat_payload, signed_headers
@@ -31,12 +31,18 @@ def session_id() -> str:
 
 @pytest.fixture
 def sent() -> list[str]:
-    """The messages that went to the meeting chat."""
+    """The messages that went to the meeting chat, in order."""
+    return []
+
+
+@pytest.fixture
+def pinned() -> list[str]:
+    """The messages that went out with a pin."""
     return []
 
 
 @pytest.fixture(autouse=True)
-def offline(monkeypatch: pytest.MonkeyPatch, sent: list[str]) -> None:
+def offline(monkeypatch: pytest.MonkeyPatch, sent: list[str], pinned: list[str]) -> None:
     """No test in this file calls OpenAI or Recall.
 
     The route starts the intake now, so a test that makes a session
@@ -58,11 +64,12 @@ def offline(monkeypatch: pytest.MonkeyPatch, sent: list[str]) -> None:
 
     monkeypatch.setattr(intake, "ask_model", fake_intake)
     monkeypatch.setattr(summary_engine, "ask_model", fake_summary)
-    monkeypatch.setattr(
-        recall_client,
-        "send_chat_message",
-        lambda bot_id, text: sent.append(text),
-    )
+    def fake_send(bot_id: str, text: str, pin: bool = False) -> None:
+        sent.append(text)
+        if pin:
+            pinned.append(text)
+
+    monkeypatch.setattr(recall_client, "send_chat_message", fake_send)
 
 
 def _post(client: TestClient, payload: dict, message_id: str = "msg_test_00000001"):
@@ -403,13 +410,14 @@ def test_the_event_time_is_stored_in_one_format(
 # --- The chat wire: section 5 -------------------------------------------
 
 
-def test_the_bot_in_the_call_asks_the_first_question(
-    client: TestClient, session_id: str, sent: list[str]
+def test_the_bot_in_the_call_sends_the_notice_and_then_the_first_question(
+    client: TestClient, session_id: str, sent: list[str], pinned: list[str]
 ) -> None:
-    """`bot.in_call_recording` starts the intake. Nothing did this before."""
+    """The order is the whole reason the notice left the create-bot body."""
     _post(client, _bot_event("bot.in_call_recording"))
 
-    assert sent == ["question 1"]
+    assert sent == [CONSENT_NOTICE, "question 1"]
+    assert pinned == [CONSENT_NOTICE]
     log = session_store.get_turns(session_id)
     assert log == [{"role": "bot", "text": "question 1"}]
 
@@ -428,7 +436,7 @@ def test_a_chat_message_gives_one_turn_and_one_question(
         {"role": "patient", "text": "I get bad headaches"},
         {"role": "bot", "text": "question 2"},
     ]
-    assert sent == ["question 1", "question 2"]
+    assert sent == [CONSENT_NOTICE, "question 1", "question 2"]
 
 
 def test_the_same_chat_message_two_times_gives_one_turn(
@@ -441,7 +449,7 @@ def test_the_same_chat_message_two_times_gives_one_turn(
     _chat(client, "I get bad headaches", message_id="msg_02")
 
     assert len(session_store.get_turns(session_id)) == 3
-    assert sent == ["question 1", "question 2"]
+    assert sent == [CONSENT_NOTICE, "question 1", "question 2"]
 
 
 def test_the_bot_does_not_answer_itself(
@@ -455,7 +463,7 @@ def test_the_bot_does_not_answer_itself(
     assert session_store.get_turns(session_id) == [
         {"role": "bot", "text": "question 1"}
     ]
-    assert sent == ["question 1"]
+    assert sent == [CONSENT_NOTICE, "question 1"]
 
 
 def test_a_chat_message_for_an_unknown_bot_gives_200(
@@ -510,7 +518,7 @@ def test_the_last_answer_gives_the_summary_and_the_closing_line(
     assert session is not None
     assert session.status == "complete"
     assert session.summary == SUMMARY_ANSWER
-    assert sent == ["question 1", CLOSING_MESSAGE]
+    assert sent == [CONSENT_NOTICE, "question 1", CLOSING_MESSAGE]
 
 
 def test_a_failed_send_puts_the_session_in_error(
@@ -518,7 +526,7 @@ def test_a_failed_send_puts_the_session_in_error(
 ) -> None:
     """A send that failed must not be silent: the frontend reads the reason."""
 
-    def refuse(bot_id: str, text: str) -> None:
+    def refuse(bot_id: str, text: str, pin: bool = False) -> None:
         raise RecallError("recall http 400: the bot is not in a call")
 
     monkeypatch.setattr(recall_client, "send_chat_message", refuse)
@@ -549,7 +557,7 @@ def test_a_failed_closing_line_keeps_the_session_complete(
         },
     )
 
-    def refuse(bot_id: str, text: str) -> None:
+    def refuse(bot_id: str, text: str, pin: bool = False) -> None:
         raise RecallError("recall http 400: the call ended")
 
     monkeypatch.setattr(recall_client, "send_chat_message", refuse)
@@ -594,11 +602,35 @@ def test_a_message_after_the_intake_sends_no_second_closing_line(
         },
     )
     _chat(client, "two weeks", message_id="msg_02")
-    assert sent == ["question 1", CLOSING_MESSAGE]
+    assert sent == [CONSENT_NOTICE, "question 1", CLOSING_MESSAGE]
 
     _chat(client, "thank you", message_id="msg_03")
 
-    assert sent == ["question 1", CLOSING_MESSAGE]
+    assert sent == [CONSENT_NOTICE, "question 1", CLOSING_MESSAGE]
     session = session_store.get_session(session_id)
     assert session is not None
     assert session.status == "complete"
+
+
+def test_a_notice_that_fails_does_not_stop_the_first_question(
+    client: TestClient, session_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused pin must not cost the intake. Only the notice is lost."""
+    asked: list[str] = []
+
+    def send(bot_id: str, text: str, pin: bool = False) -> None:
+        if pin:
+            raise RecallError("recall http 400: continuous chat is on")
+        asked.append(text)
+
+    monkeypatch.setattr(recall_client, "send_chat_message", send)
+
+    _post(client, _bot_event("bot.in_call_recording"))
+
+    assert asked == ["question 1"]
+    session = session_store.get_session(session_id)
+    assert session is not None
+    assert session.status == "in_progress"
+    assert session_store.get_turns(session_id) == [
+        {"role": "bot", "text": "question 1"}
+    ]

@@ -32,7 +32,7 @@ from app.config import settings  # noqa: E402  The import must follow the lines 
 from app.db import session_store  # noqa: E402
 from app.engine import loop  # noqa: E402
 from app.engine.intake import turn_count  # noqa: E402
-from app.modes.base import MODES  # noqa: E402
+from app.modes.base import CONSENT_NOTICE, MODES  # noqa: E402
 
 CONSOLE_URL = "https://meet.google.com/console-driver"
 
@@ -48,6 +48,9 @@ class ConsoleMode:
         # Google Meet refuses a chat message of more than 500 characters.
         if len(text) > 500:
             print(f"  [warning] {len(text)} characters. Google Meet permits 500.")
+
+    def send_notice(self, session_id: str, text: str) -> None:
+        print(f"\n  NOTICE     {text}")
 
 
 def _report(session_id: str) -> int:
@@ -86,6 +89,7 @@ def main() -> int:
     print("Answer as the patient. Ctrl-C stops.")
     print("-" * 70)
 
+    MODES["chat"].send_notice(session.id, CONSENT_NOTICE)
     loop.start_intake(session.id)
 
     while True:
