@@ -39,6 +39,9 @@ WORKDIR /app
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --chown=appuser:appuser app ./app
 
+# The mount point of the SQLite named volume
+RUN mkdir -p /app/data && chown appuser:appuser /app/data
+
 USER appuser
 
 # Make port 8000 available on the container network. Docker Compose does not

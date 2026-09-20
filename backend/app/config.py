@@ -1,19 +1,42 @@
 """The configuration for the backend application.
 
-Task 2 changes this module to a ``pydantic-settings`` class. It then adds
-``RECALL_API_KEY``, ``OPENAI_API_KEY`` and the database path, and it reads
-``CORS_ORIGINS`` from the environment.
 """
 
-# The browser origins that can call this API. 
-#
-# Task 2 makes this value an environment variable. The list below stays as the
-# default.
-CORS_ORIGINS = [
-    "https://recall.samneet.com",  # The deployed Cloudflare Worker.
-    "http://localhost:8787",  # wrangler dev, the default port.
-    "http://127.0.0.1:8787",  # The same server, the other loopback name.
-]
+from pathlib import Path
 
-CORS_METHODS = ["GET", "POST", "OPTIONS"]
-CORS_HEADERS = ["Authorization", "Content-Type"]
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """The settings of the backend application."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # API keys
+    RECALL_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+
+    # The SQLite file. Default is the path in the container
+    DB_PATH: Path = Path("/app/data/recall_demo.sqlite3")
+
+    # Browser origins that can call this API
+    CORS_ORIGINS: list[str] = [
+        "https://recall.samneet.com",  # The deployed Cloudflare Worker.
+        "http://localhost:8787",  # wrangler dev, the default port.
+        "http://127.0.0.1:8787",
+    ]
+
+    CORS_METHODS: list[str] = ["GET", "POST", "OPTIONS"]
+    CORS_HEADERS: list[str] = ["Authorization", "Content-Type"]
+
+
+settings = Settings()
+
+# Aliases. `app/main.py` imports by these names
+CORS_ORIGINS = settings.CORS_ORIGINS
+CORS_METHODS = settings.CORS_METHODS
+CORS_HEADERS = settings.CORS_HEADERS

@@ -73,6 +73,10 @@ different places and can fail independently.
 - Don't add a new dependency without flagging it first.
 - Don't touch `frontend/` while working a `backend/` task, or vice versa, in the same turn.
 - Keep the mock intake logic in one clearly named module (e.g. `backend/engine/`), not scattered across route handlers.
+- Keep comments short. No large block comments. A comment says what the code cannot:
+  an assumption, a constraint, a reason for an unusual choice, or a line that must not
+  be changed. Do not restate what the code already says, and do not leave instructions
+  for a future session in the source — those go in `docs/`.
 - SQLite is fine for this demo. No migrations framework needed, keep the schema small.
 - No HIPAA-related controls in this build. Note it as a next step in the README, not something to implement now.
 - When creating any documentation or communicating with the user, utilize ASD-STE100 conventions.

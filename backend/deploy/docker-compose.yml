@@ -20,9 +20,15 @@ services:
     # outside.
     expose:
       - "8000"
+    # The SQLite file as a named volume.
+    volumes:
+      - db-data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  db-data:

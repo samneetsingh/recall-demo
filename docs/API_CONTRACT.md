@@ -60,9 +60,176 @@ it against the session in SQLite.
 - Recall signs webhook/callback requests. Verify signatures on the backend before
   trusting payloads. See "Verifying webhooks, websockets and callback requests."
 
-## Open questions to confirm while building
+## Answers to the open questions
 
-- [ ] Exact real-time transcript delivery mechanism: webhook vs WebSocket.
-- [ ] Exact audio format Recall expects for output audio.
-- [ ] Whether chat messages arrive as webhook events or need to be polled.
-- [ ] Bot sub-codes to handle for error states (see "Bot Sub Codes" in the docs).
+Session 04 answered these questions with the `recall-ai` MCP server, which reads the
+live Recall.ai documentation. The workspace is `Sandbox`, and it supports bot schema
+v1.11 only.
+
+### [x] The delivery mechanism of the real-time transcript: webhook or WebSocket
+
+Recall supplies both. You select the mechanism in the Create Bot request, in
+`recording_config.realtime_endpoints[].type`, which is `webhook` or `websocket`. The
+event `transcript.data` is necessary for a real-time transcript. Two fields are
+necessary together: `recording_config.transcript.provider` and
+`recording_config.realtime_endpoints`. If one is absent, no transcript event comes.
+
+```json
+"recording_config": {
+  "transcript": {
+    "provider": {
+      "recallai_streaming": { "mode": "prioritize_low_latency", "language_code": "en" }
+    }
+  },
+  "realtime_endpoints": [
+    { "type": "webhook", "url": "https://.../webhooks/recall", "events": ["transcript.data"] }
+  ]
+}
+```
+
+**This build uses the webhook type.** The backend is behind nginx, and the nginx
+configuration does not pass the `Upgrade` and `Connection` headers at this time. A
+webhook needs no change to nginx. The two types give the same payload.
+
+More facts:
+
+- The mode `prioritize_low_latency` gives a lower delay. The default is
+  `prioritize_accuracy`, which uses an asynchronous model and has more delay.
+- The event `transcript.partial_data` gives the words before the utterance is complete.
+  The turn-taking logic of mode 2 does not need it. `transcript.data` is sufficient.
+- The events `participant_events.speech_on` and `participant_events.speech_off` are a
+  better turn-taking signal than a timer. Look at them if the silence timer is not good.
+- Recall sends the webhooks in sequence. A slow handler delays the next event. The
+  handler must answer 2xx immediately and do the work after that.
+- A failure of the transcription gives a `transcript.failed` event on the **dashboard**
+  webhook endpoint, not on the real-time endpoint. The two configurations are different
+  and their event sets do not intersect.
+
+Method: `recall-ai` MCP, `get_doc` for `bot-real-time-transcription`.
+
+### [x] The audio format for the output audio
+
+**mp3, as a base64 string.** The body of `POST /api/v1/bot/{id}/output_audio/` is:
+
+```json
+{ "kind": "mp3", "b64_data": "<the base64 mp3>" }
+```
+
+`kind` accepts `mp3` only. OpenAI TTS gives mp3 by default, so no conversion of the
+format is necessary. The backend must only encode the bytes to base64.
+
+**One condition is important:** the Output Audio endpoint operates only if the bot was
+made with an `automatic_audio_output` configuration. Recall tells you to put a short
+silent mp3 in that configuration if you do not want automatic audio. Put this in the
+Create Bot request of mode 2.
+
+Do not use the Output Media feature for this demo. It is the other method to make a bot
+speak: it streams a web page that you control into the meeting, with the camera or the
+screen share. It is more powerful, but it is mutually exclusive with
+`automatic_audio_output` and with the Output Audio endpoint, and it always sends video.
+
+Method: `recall-ai` MCP, `get_doc` for `output-audio-in-meetings` and `stream-media`.
+
+### [x] Chat messages: webhook events or polling
+
+**Webhook events. No polling is necessary.** Chat messages come through the same
+real-time endpoint configuration as the transcript. Put the event
+`participant_events.chat_message` in `recording_config.realtime_endpoints[].events` in
+the Create Bot request.
+
+```json
+"recording_config": {
+  "realtime_endpoints": [
+    { "type": "webhook", "url": "https://.../webhooks/recall", "events": ["participant_events.chat_message"] }
+  ]
+}
+```
+
+Google Meet has full support, with no limitation. Recall also keeps all chat messages
+for a download after the call, at
+`recordings[i].media_shortcuts.participant_events.data.participant_events_download_url`.
+The demo does not need this, because it reads the messages during the call.
+
+To receive chat messages without a recording, add `"participant_events": {}` and
+`"retention": null` to `recording_config`.
+
+Method: `recall-ai` MCP, `get_doc` for `receiving-chat-messages`.
+
+### [x] The bot sub-codes to handle for the error states
+
+A `sub_code` comes with a bot status change event, in `data.data.sub_code`. The
+dashboard webhook endpoint receives these events, with this shape:
+
+```json
+{
+  "event": "bot.fatal",
+  "data": { "data": { "code": "fatal", "sub_code": "meeting_link_invalid", "updated_at": "..." },
+            "bot": { "id": "...", "metadata": {} } }
+}
+```
+
+The events are `bot.joining_call`, `bot.in_waiting_room`, `bot.in_call_not_recording`,
+`bot.recording_permission_allowed`, `bot.recording_permission_denied`,
+`bot.in_call_recording`, `bot.call_ended`, `bot.done` and `bot.fatal`. A `sub_code`
+comes with `bot.fatal`, `bot.call_ended` and `bot.recording_permission_denied` (Zoom).
+
+**Important rule: do not make the `sub_code` an enum.** Recall adds values without a
+notice. The backend must write the value into the `error_reason` column and show it. A
+value that the code does not know must not stop the application.
+
+These sub-codes are the applicable ones for a Google Meet demo. Each one makes the
+session status `error`:
+
+| Sub code | Meaning |
+|---|---|
+| `meeting_link_invalid` | The meeting does not exist, or the link is bad. The most frequent error of the demo |
+| `meeting_link_expired` | The link is not valid now |
+| `meeting_not_found` | No meeting is at the link |
+| `meeting_not_started` | The meeting did not start |
+| `meeting_requires_sign_in` | Only a user with an account can join. The bot has no Google account |
+| `google_meet_knocking_disabled` | The host settings do not let the bot ask to join |
+| `google_meet_bot_blocked` | The meeting does not permit the bot |
+| `google_meet_organisation_restricted` | The call permits only members of the organization of the host |
+| `google_meet_video_error` | A Google Meet video error stopped the join |
+| `google_meet_meeting_room_not_ready` | The meeting room was not ready |
+| `google_meet_internal_error` | An internal problem of Google Meet |
+| `bot_errored` | An unexpected error in the bot |
+| `failed_to_launch_in_time` | A problem of the Recall infrastructure |
+
+These `bot.call_ended` sub-codes are normal, not an error. Do not make the status
+`error` for them:
+
+| Sub code | Meaning |
+|---|---|
+| `call_ended_by_host` | The host ended the call |
+| `bot_kicked_from_call` | The host removed the bot |
+| `timeout_exceeded_everyone_left` | The other participants left |
+| `timeout_exceeded_noone_joined` | No person joined |
+| `call_ended_by_platform_waiting_room_timeout` | The Google Meet waiting room timeout is 10 minutes |
+| `timeout_exceeded_silence_detected` | Recall thinks that only bots are in the call |
+
+A demo that ends before the intake is complete must make the status `complete` or
+`error` with the sub-code as the reason. The frontend polls, and it must not wait for a
+session that has no bot in the call.
+
+Method: `recall-ai` MCP, `get_doc` for `sub-codes` and `bot-status-change-events`.
+
+## Webhook configuration: an open item
+
+`list_webhook_endpoints` on the `Sandbox` workspace gives an empty list. **No dashboard
+webhook endpoint exists at this time.** The bot status events have no destination. Make
+the endpoint in the Recall dashboard before the task that receives the events. This is a
+manual task for a human, in the dashboard.
+
+Two different configurations send events, and this demo uses both:
+
+| Configuration | Where you make it | Events it sends |
+|---|---|---|
+| The dashboard webhook | The Recall dashboard, one time | `bot.*` status changes, `transcript.done`, `transcript.failed` |
+| `recording_config.realtime_endpoints` | In each Create Bot request | `transcript.data`, `participant_events.chat_message` |
+
+Both can point at the same URL, `POST /webhooks/recall`. The event sets do not
+intersect. `dashboard_uses_workspace_verification_secret` is true for this workspace, so
+one verification secret verifies the requests of both.
+
+Method: `recall-ai` MCP, `list_webhook_endpoints` and `get_info`.

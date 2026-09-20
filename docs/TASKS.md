@@ -12,14 +12,19 @@ works end to end.
 
 ## 2. Backend skeleton
 
-- [ ] Poetry project initialized, FastAPI running.
-- [ ] SQLite schema: sessions table (id, meeting_url, status, transcript log, summary).
-- [ ] `config.py` migrated from plain constants to `pydantic-settings`
+- [x] Poetry project initialized, FastAPI running.
+- [x] SQLite schema: sessions table (id, meeting_url, status, transcript log, summary).
+      Also `mode`, `error_reason`, `bot_id`, `created_at`, `updated_at`. See
+      `task-02-backend-skeleton/todo.md` for the reason for each one.
+- [x] `config.py` migrated from plain constants to `pydantic-settings`
       (adds the `pydantic-settings` dependency).
-- [ ] Recall API key stored as an environment variable, never committed.
-- [ ] Endpoint: create session (takes a meeting URL, creates a Recall bot).
-- [ ] Endpoint: get session status.
-- [ ] Endpoint: get session summary.
+- [x] Recall API key stored as an environment variable, never committed.
+      `backend/.env` is not on the homelab server yet. Owner: Sam.
+- [~] Endpoint: create session (takes a meeting URL, creates a Recall bot).
+      The route makes the session row. It does not make a bot yet.
+- [x] Endpoint: get session status.
+- [~] Endpoint: get session summary. The route and the 404 rule operate. The
+      summary is stub data until the engine of section 3 writes a real one.
 - [ ] Webhook endpoint(s) for Recall bot status events, verified against Recall's
       signature.
 

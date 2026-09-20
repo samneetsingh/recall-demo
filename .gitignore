@@ -11,3 +11,6 @@ __pycache__/
 # Node, frontend/
 node_modules/
 .wrangler/
+
+# The SQLite database files of the backend.
+*.sqlite3

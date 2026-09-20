@@ -1,20 +1,33 @@
 """The FastAPI application for the Recall demo backend.
 
-This module holds the application object, the middleware and the two
-infrastructure routes. Task 2 adds the routers from ``app.routes`` here. Keep
-the business logic and the configuration values out of this file. The
-configuration is in ``app.config``.
+This module holds the application object, the middleware, the two
+infrastructure routes and the wiring. Business logic, SQL and
+configuration values should stay out of this file. 
 """
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import CORS_HEADERS, CORS_METHODS, CORS_ORIGINS
+from app.db import session_store
+from app.routes import sessions
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Make the database table before the application takes requests."""
+    session_store.init_db()
+    yield
+
 
 app = FastAPI(
     title="Recall demo backend",
     description="An AI pre-visit intake assistant that joins a video call.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -25,9 +38,9 @@ app.add_middleware(
     allow_headers=CORS_HEADERS,
 )
 
-# Task 2 registers the routers here:
-#     from app.routes import sessions, webhooks
-#     app.include_router(sessions.router)
+app.include_router(sessions.router)
+# The next task adds the webhook router here:
+#     from app.routes import webhooks
 #     app.include_router(webhooks.router)
 
 

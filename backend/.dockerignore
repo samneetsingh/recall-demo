@@ -1,4 +1,6 @@
 .env
+tests/
+data/
 .venv/
 deploy/
 __pycache__/

@@ -19,7 +19,7 @@ Request body:
 
 `mode` is `"chat"` or `"voice"`.
 
-Response:
+Response: HTTP 201.
 ```json
 {
   "session_id": "abc123",
@@ -36,11 +36,15 @@ Response:
 {
   "session_id": "abc123",
   "status": "in_progress",
-  "summary": null
+  "summary": null,
+  "error_reason": null
 }
 ```
 
 `status` values: `creating_bot`, `waiting_for_bot`, `in_progress`, `complete`, `error`.
+
+`error_reason` is a short text with the status `error`, and `null` with each other
+status. The frontend shows this text to the user. See `IMPLEMENTATION.md`.
 
 ## GET /sessions/{session_id}/summary
 
